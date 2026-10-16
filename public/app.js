@@ -72,14 +72,33 @@
       if (node.tagName === 'A') { node.setAttribute('target', '_blank'); node.setAttribute('rel', 'noopener'); }
     });
   }
+  const MENTION_RE = /(^|[\s(>])(@[\p{L}\p{N}_-]+)/gu;
+  // Wraps @mentions in rendered HTML, skipping code blocks and links.
+  function highlightMentions(html) {
+    if (!html.includes('@')) return html;
+    const tpl = document.createElement('template');
+    tpl.innerHTML = html;
+    const walker = document.createTreeWalker(tpl.content, NodeFilter.SHOW_TEXT);
+    const hits = [];
+    while (walker.nextNode()) {
+      const n = walker.currentNode;
+      if (n.nodeValue.includes('@') && !n.parentElement?.closest('code, pre, a')) hits.push(n);
+    }
+    for (const n of hits) {
+      const span = document.createElement('span');
+      span.innerHTML = esc(n.nodeValue).replace(MENTION_RE, '$1<span class="mention">$2</span>');
+      n.replaceWith(...span.childNodes);
+    }
+    return tpl.innerHTML;
+  }
   function md(text) {
     if (window.marked && window.DOMPurify) {
-      return DOMPurify.sanitize(marked.parse(text || '', { breaks: true, gfm: true }))
+      return highlightMentions(DOMPurify.sanitize(marked.parse(text || '', { breaks: true, gfm: true })))
         .replace(/<pre>/g, '<pre><button type="button" class="copy-code">Copy</button>');
     }
     return esc(text).replace(/\n/g, '<br>');
   }
-  const plain = (text) => esc(text).replace(/\n/g, '<br>');
+  const plain = (text) => esc(text).replace(MENTION_RE, '$1<span class="mention">$2</span>').replace(/\n/g, '<br>');
 
   function toast(msg) {
     const t = $('#toast');
@@ -253,7 +272,10 @@
       sub.textContent = (c.status || 'typing…') + (c.queued ? ` · ${c.queued} queued` : '');
       sub.className = 'head-sub typing';
     } else {
-      sub.textContent = isGroup ? [...membersOf(c).map((a) => a.name), 'You'].join(', ') : `online · ${PROVIDER_SHORT[providerOf(c)]} · ${shortPath(c.cwd)}${c.fullAccess !== false ? ' · full PC access' : ''}`;
+      const modes = [c.teamTalk ? '🗣️ Team talk' : '', c.parallel ? '⚡ Same time' : ''].filter(Boolean).join(' · ');
+      sub.textContent = isGroup
+        ? `${modes ? modes + ' · ' : ''}${[...membersOf(c).map((a) => a.name), 'You'].join(', ')}`
+        : `online · ${PROVIDER_SHORT[providerOf(c)]} · ${shortPath(c.cwd)}${c.fullAccess !== false ? ' · full PC access' : ''}`;
       sub.title = isGroup ? '' : c.cwd || '';
       sub.className = 'head-sub';
     }
@@ -268,7 +290,7 @@
     }
     $('#btnStopHead').hidden = !c.running;
     $('#drawerTitle').textContent = isGroup ? 'Group info' : 'Agent info';
-    $('#input').placeholder = isGroup ? 'Message the group (type @ to mention)' : 'Type a message';
+    $('#input').placeholder = isGroup ? `Message the team, e.g. “@${membersOf(c)[0]?.name || 'Backend'} create the API”` : 'Type a message';
   }
 
   const isBubble = (m) => m.role === 'user' || m.role === 'assistant';
@@ -772,17 +794,28 @@
 
   function groupSettingsHtml(g) {
     const all = agents();
+    const turns = [4, 8, 12, 20, 30, 50];
     return `
-      <label class="field"><span>Topic / instructions</span>
-        <textarea name="systemPrompt" rows="3" placeholder="What is this group for?">${esc(g.systemPrompt || '')}</textarea></label>
-      <div class="field"><span>Members · answer in this order</span>
+      <label class="switch"><input type="checkbox" name="teamTalk" ${g.teamTalk ? 'checked' : ''}>
+        <span><b>🗣️ Team talk</b><small class="muted" style="text-align:left;display:block">Agents @mention each other to hand off work and keep going until the job is done.</small></span></label>
+      <label class="switch"><input type="checkbox" name="parallel" ${g.parallel ? 'checked' : ''}>
+        <span><b>⚡ Work at the same time</b><small class="muted" style="text-align:left;display:block">Everyone who's asked works in parallel instead of waiting their turn.</small></span></label>
+      <label class="field"><span>Hand-off limit per message</span>
+        <select name="maxTurns" ${g.teamTalk ? '' : 'disabled'}>${turns.map((n) => `<option value="${n}" ${n === (g.maxTurns || 12) ? 'selected' : ''}>${n} hand-offs</option>`).join('')}</select>
+        <small>How many times agents can pull each other in before pausing for you, so a long back-and-forth can't eat your limits.</small></label>
+      <div class="field"><span>Shared project folder</span>
+        <div class="inline"><input name="cwd" value="${esc(g.cwd || '')}" placeholder="Empty: each agent uses its own folder" spellcheck="false"><button type="button" data-browse="cwd">Browse…</button></div>
+        <small>Set one folder and the whole team builds the project there.</small></div>
+      <label class="field"><span>Project / topic</span>
+        <textarea name="systemPrompt" rows="3" placeholder="What is this team building?">${esc(g.systemPrompt || '')}</textarea></label>
+      <div class="field"><span>Members${g.parallel ? '' : ' · answer in this order'}</span>
         ${all.length ? all.map((a) => `
           <label class="member-row">
             <input type="checkbox" name="member" value="${a.id}" ${(g.members || []).includes(a.id) ? 'checked' : ''}>
             <div class="avatar" style="--av:${a.color}">${esc(a.avatar)}</div>
             <span>${esc(a.name)}<br><small>${esc(modelName(a.model))} · ${esc(shortPath(a.cwd))}</small></span>
           </label>`).join('') : '<small>Create some agents first.</small>'}
-        <small>Each agent keeps its own model, folder and permissions here, with a separate memory for this group.</small></div>`;
+        <small>Each agent keeps its own model and permissions here, with a separate memory for this group. The first line of an agent's “About” tells the team what its role is.</small></div>`;
   }
 
   // Browse buttons in any form open the folder picker for the named input.
@@ -846,7 +879,7 @@
     else if (f.type === 'checkbox') patch = { [f.name]: f.checked };
     else patch = { [f.name]: f.value };
     await updateChat(activeId, patch);
-    if (['permissionMode', 'fullAccess', 'member', 'provider', 'model'].includes(f.name)) renderDrawer();
+    if (['permissionMode', 'fullAccess', 'member', 'provider', 'model', 'teamTalk', 'parallel'].includes(f.name)) renderDrawer();
   });
   $('#infoForm').addEventListener('submit', (e) => e.preventDefault());
   $('#infoForm').addEventListener('click', async (e) => {
@@ -942,7 +975,15 @@
     const members = [...$('#groupMembers').querySelectorAll('input:checked')].map((i) => i.value);
     if (!members.length) return toast('Pick at least one agent.');
     try {
-      const c = await api('POST', '/chats', { type: 'group', name: form.name.value, systemPrompt: form.systemPrompt.value, members });
+      const c = await api('POST', '/chats', {
+        type: 'group',
+        name: form.name.value,
+        systemPrompt: form.systemPrompt.value,
+        members,
+        teamTalk: form.teamTalk.checked,
+        parallel: form.parallel.checked,
+        cwd: form.cwd.value.trim(),
+      });
       chats.set(c.id, c);
       openChat(c.id);
     } catch (e) { toast(e.message); }

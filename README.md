@@ -30,6 +30,16 @@ Double-click it and ClaudeChat opens in **its own app window**: no tabs or addre
 
 The build uses Node's single-executable-app feature. Instead of `postject`, it embeds the app with a tiny injector (`build/inject.cs`) compiled by Windows' built-in C# compiler, so nothing gets downloaded. The exe is unsigned, so the first launch may show Windows SmartScreen: choose **More info → Run anyway**.
 
+## Team mode: agents that work together
+
+In a group chat (👥), turn on:
+
+- **🗣️ Team talk:** agents @mention each other to hand off work like real teammates. Say "@Backend create the API keys, I'll do the UI" and Backend does its part, then can write "@Frontend the key is `API_KEY`…", which brings Frontend in next. The back-and-forth keeps going until nobody is mentioned. A **hand-off limit** (12 by default) pauses the team so it can't burn through your usage; send a message to continue. Agents write "@You" when they need you to decide something.
+- **⚡ Work at the same time:** everyone who's asked works in parallel instead of waiting their turn.
+- **Shared project folder:** one folder the whole team builds in. Leave it empty to let each agent use its own folder.
+
+Give each agent a role in its **About** field (e.g. "Backend developer: owns the API"). Teammates see the first line of it. Claude Code and Antigravity agents can be in the same team.
+
 ## Google Antigravity (Gemini) agents
 
 If the [Antigravity](https://antigravity.google) CLI (`agy`) is installed, pick **Provider → Antigravity (Gemini)** when creating an agent. ClaudeChat loads Antigravity's model list at startup, for example **Gemini 3.8 Flash** (Low/Medium/High effort), Claude Sonnet 4.6 and Opus 4.6, and GPT-OSS 120B. Gemini and Claude agents can sit in the same group chat.

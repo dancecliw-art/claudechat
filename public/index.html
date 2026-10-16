@@ -207,11 +207,18 @@
 <dialog id="groupDialog">
   <form method="dialog" id="groupForm">
     <h2>👥 New group</h2>
-    <p class="muted">Agents in a group see each other's messages and answer in turn. @mention a name to ask only that agent.</p>
+    <p class="muted">Put your agents in a team. They see each other's messages, and you can @mention a name to talk to only that agent.</p>
     <div class="settings">
       <label class="field"><span>Group name</span><input name="name" required maxlength="60" placeholder="e.g. Launch team"></label>
       <div class="field"><span>Members</span><div class="bc-list" id="groupMembers"></div></div>
-      <label class="field"><span>Topic / instructions</span><textarea name="systemPrompt" rows="2" placeholder="e.g. Plan the v2 launch together. Frontend owns UI, Backend owns API."></textarea></label>
+      <label class="switch"><input type="checkbox" name="teamTalk" checked>
+        <span><b>🗣️ Team talk</b><small class="muted" style="text-align:left;display:block">Agents @mention each other to hand off work, like “@Backend create the API keys, I’ll do the UI”, and keep going until the job is done.</small></span></label>
+      <label class="switch"><input type="checkbox" name="parallel">
+        <span><b>⚡ Work at the same time</b><small class="muted" style="text-align:left;display:block">Everyone who's asked works in parallel instead of waiting their turn. Faster, but uses your limits faster too.</small></span></label>
+      <div class="field"><span>Shared project folder (optional)</span>
+        <div class="inline"><input name="cwd" placeholder="Leave empty: each agent uses its own folder" spellcheck="false"><button type="button" data-browse="cwd">Browse…</button></div>
+        <small>Pick one folder and the whole team builds the project there.</small></div>
+      <label class="field"><span>Topic / instructions</span><textarea name="systemPrompt" rows="2" placeholder="e.g. Build a todo app. Backend owns the API, Frontend owns the UI."></textarea></label>
     </div>
     <div class="dialog-actions">
       <button value="cancel" class="ghost" formnovalidate>Cancel</button>

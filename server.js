@@ -156,6 +156,13 @@ for (const c of db.chats) {
   c.memberSessions ??= {};
   c.memberCursor ??= {};
   c.allowRules ??= [];
+  if (c.type === 'group' && c.teamTalk === undefined) {
+    // Groups made before team modes: keep the old take-turns behaviour, each agent in its own folder.
+    c.teamTalk = false;
+    c.parallel = false;
+    c.maxTurns = 12;
+    c.cwd = '';
+  }
   if (!PERMISSION_MODES.includes(c.permissionMode)) c.permissionMode = 'smart';
   c.status = null;
   for (const m of c.messages) {
@@ -183,10 +190,28 @@ const findChat = (id) => db.chats.find((c) => c.id === id);
 
 // ---------- live state ----------
 
-const runs = new Map();   // chatId -> current run { proc, stopped, ... }
+const runs = new Map();   // chatId -> Set of running CLI processes { proc, stopped, who, ... }
 const busy = new Set();   // chatIds whose queue is being processed
 const queues = new Map(); // chatId -> [{ messageId }]
 const stopFlags = new Set();
+
+// A group in "work at the same time" mode has several agents running at once.
+function addRun(chatId, run) {
+  if (!runs.has(chatId)) runs.set(chatId, new Set());
+  runs.get(chatId).add(run);
+}
+function removeRun(chatId, run) {
+  const set = runs.get(chatId);
+  if (!set) return;
+  set.delete(run);
+  if (!set.size) runs.delete(chatId);
+}
+function killRuns(chatId) {
+  for (const r of runs.get(chatId) || []) {
+    r.stopped = true;
+    try { r.proc.kill(); } catch {}
+  }
+}
 const approvals = new Map(); // approvalId -> { chat, run, agent, requestId, input, ruleKey, message }
 
 const pendingApprovals = (chatId) => [...approvals.values()].filter((a) => a.chat.id === chatId).length;
@@ -343,7 +368,7 @@ function runClaude({ chat, agent, sessionId, systemPrompt, prompt, from }) {
 
     const proc = spawn(CLAUDE_BIN, args, { cwd, windowsHide: true, env: process.env });
     const run = { proc, agent, cwd, from, who: from?.name, sessionId, streamed: new Map(), streamedMsgIds: new Set(), tools: new Map(), pending: new Set(), stderr: '' };
-    runs.set(chat.id, run);
+    addRun(chat.id, run);
     status(chat, run, 'typing…');
     proc.stdin.on('error', () => {});
     send(run, { type: 'user', message: { role: 'user', content: [{ type: 'text', text: prompt }] }, parent_tool_use_id: null });
@@ -367,7 +392,7 @@ function runClaude({ chat, agent, sessionId, systemPrompt, prompt, from }) {
       pushMessage(chat, { role: 'system', text: `Could not start the claude CLI: ${err.message}. Is Claude Code installed and on your PATH?`, error: true });
     });
     proc.on('close', (code) => {
-      runs.delete(chat.id);
+      removeRun(chat.id, run);
       for (const id of run.pending) {
         const a = approvals.get(id);
         approvals.delete(id);
@@ -386,6 +411,13 @@ function runClaude({ chat, agent, sessionId, systemPrompt, prompt, from }) {
 }
 
 function status(chat, run, s) {
+  run.statusText = s;
+  // Several agents working at once: list them instead of showing whoever spoke last.
+  const active = [...(runs.get(chat.id) || [])].filter((r) => r.who && r.statusText);
+  if (active.length > 1 && !/approval/.test(s)) {
+    const names = [...new Set(active.map((r) => r.who))];
+    return setStatus(chat, `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]} are working…`);
+  }
   setStatus(chat, run.who ? `${run.who} is ${s}` : s);
 }
 
@@ -581,7 +613,7 @@ function agyTurn({ chat, agent, sessionId, prompt, from, skipPermissions, cwd })
       // During a one-off "skip permissions" retry, ClaudeChat still stops unchecked risky commands.
       skipWatch: skipPermissions && mode !== 'bypassPermissions',
     };
-    runs.set(chat.id, run);
+    addRun(chat.id, run);
     status(chat, run, 'typing…');
     proc.stdin.on('error', () => {});
     proc.stdin.end(JSON.stringify({ event: 'user', message: { role: 'user', content: prompt } }) + '\n');
@@ -605,7 +637,7 @@ function agyTurn({ chat, agent, sessionId, prompt, from, skipPermissions, cwd })
       pushMessage(chat, { role: 'system', text: `Could not start Antigravity (agy): ${err.message}`, error: true });
     });
     proc.on('close', (code) => {
-      runs.delete(chat.id);
+      removeRun(chat.id, run);
       for (const s of run.steps.values()) if (s.role === 'assistant' && s.msg.streaming) patchMessage(chat, s.msg, { streaming: false });
       // The commands agy refused are the last N run_command steps of this turn.
       const cmdDenials = run.denied.filter((d) => d.action === 'command').length;
@@ -748,7 +780,7 @@ function runShell(chat, command, cwd, from) {
       : ['-lc', command];
     const proc = spawn(win ? 'powershell.exe' : 'bash', args, { cwd, windowsHide: true });
     const run = { proc, who: from?.name, pending: new Set() };
-    runs.set(chat.id, run);
+    addRun(chat.id, run);
     status(chat, run, 'running a command…');
     let out = '';
     const add = (d) => { if (out.length < 60000) out += d.toString('utf8'); };
@@ -758,7 +790,7 @@ function runShell(chat, command, cwd, from) {
     proc.on('error', (e) => { out += `\n${e.message}`; });
     proc.on('close', (code) => {
       clearTimeout(timer);
-      runs.delete(chat.id);
+      removeRun(chat.id, run);
       resolve({ code: code ?? 1, output: out.trim().slice(0, 20000), stopped: !!run.stopped });
     });
   });
@@ -856,23 +888,74 @@ async function runAgentTurn(chat, userMsg) {
   if (r.sessionId) chat.sessionId = r.sessionId;
 }
 
+// ---------- groups: team talk (@mentions) and working at the same time ----------
+
+const normName = (s) => String(s).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+// Code can contain things like @decorator or emails, so mentions only count outside it.
+const stripCode = (t) => String(t || '').replace(/```[\s\S]*?```/g, ' ').replace(/`[^`\n]*`/g, ' ');
+
+// Which members a message @mentions. "@Front end" and "@Frontend" both match "Front end".
 function mentioned(text, members) {
-  const t = (text || '').toLowerCase();
-  if (t.includes('@all') || t.includes('@everyone')) return members;
-  return members.filter((a) => t.includes('@' + a.name.toLowerCase()));
+  const t = stripCode(text).toLowerCase();
+  if (/(^|[^\w])@(all|everyone|team)\b/.test(t)) return members;
+  const tokens = new Set();
+  for (const m of t.matchAll(/(?:^|[^\w])@([\p{L}\p{N}_-]+(?:[ ][\p{L}\p{N}_-]+)?)/gu)) {
+    tokens.add(normName(m[1]));
+    tokens.add(normName(m[1].split(' ')[0]));
+  }
+  return members.filter((a) => tokens.has(normName(a.name)));
 }
 
+const firstLine = (s) => String(s || '').split('\n').map((l) => l.trim()).find(Boolean) || '';
+
 function groupSystemPrompt(group, agent, members) {
-  const others = members.filter((a) => a.id !== agent.id).map((a) => a.name);
+  const others = members.filter((a) => a.id !== agent.id);
+  const roster = others.map((a) => `- @${a.name}${a.systemPrompt ? `: ${firstLine(a.systemPrompt).slice(0, 160)}` : ''}${group.cwd ? '' : ` (works in ${a.cwd || 'their home folder'})`}`);
   return [
-    `You are "${agent.name}", one member of a group chat called "${group.name}" in ClaudeChat, a WhatsApp-style app.`,
-    `The group has the user and these other AI agents: ${others.join(', ') || 'none'}.`,
+    `You are "${agent.name}", a member of the team in the group chat "${group.name}" in ClaudeChat, a WhatsApp-style app.`,
+    `You work alongside the user and these AI teammates:`,
+    ...(roster.length ? roster : ['- (no other agents yet)']),
     'Each turn shows the newest group messages as "Name: message". Write only your own reply, without prefixing your name.',
-    'Keep replies short and conversational unless the task needs more. Build on what the others said instead of repeating it.',
-    'You can still use your tools.',
-    group.systemPrompt ? `Group topic / instructions: ${group.systemPrompt}` : '',
-    agent.systemPrompt ? `Your own instructions: ${agent.systemPrompt}` : '',
+    group.teamTalk
+      ? [
+        'Work like a real teammate on a shared project. Hand off work or ask questions by @mentioning a teammate by name, for example "@Backend please add the /login endpoint, I\'ll build the form".',
+        'A mention makes that teammate reply next, so mention someone only when you need them to act or answer, and say exactly what you need.',
+        'Never @mention yourself. When your part is done and nobody needs to act, don\'t mention anyone. Write "@You" when you need the user to decide something.',
+      ].join('\n')
+      : 'The user decides who speaks; keep replies conversational.',
+    group.parallel ? 'Your teammates may be working at the same time as you. Stick to your own part and don\'t edit files a teammate is working on.' : '',
+    group.cwd ? `The whole team works in the same project folder: ${group.cwd}. Coordinate who changes which files.` : '',
+    'Keep replies short and chat-like unless the task needs more. Build on what the others said instead of repeating it. Use your tools to actually do the work.',
+    group.systemPrompt ? `Project / group instructions: ${group.systemPrompt}` : '',
+    agent.systemPrompt ? `Your own role and instructions: ${agent.systemPrompt}` : '',
   ].filter(Boolean).join('\n');
+}
+
+// One member's turn: sees every group message since its last turn, replies, and returns
+// the text it wrote (to look for @mentions of teammates).
+async function memberTurn(group, agent, members) {
+  const cursor = group.memberCursor[agent.id] || 0;
+  const fresh = group.messages.slice(cursor).filter((m) =>
+    m.role === 'user' || (m.role === 'assistant' && m.from?.id !== agent.id && !m.streaming));
+  let transcript = fresh.map((m) => `${m.role === 'user' ? 'User' : m.from?.name || 'Agent'}: ${m.role === 'user' ? promptFor(m) : m.text}`).join('\n\n');
+  // Antigravity only gets instructions with its first message, so remind it of team talk.
+  if (agent.provider === 'antigravity' && group.teamTalk && group.memberSessions[agent.id]) {
+    transcript = '(Team chat: @mention a teammate by name to hand them work.)\n\n' + transcript;
+  }
+  group.memberCursor[agent.id] = group.messages.length;
+  const start = group.messages.length;
+  // A shared project folder overrides each agent's own folder while it works for this group.
+  const worker = group.cwd ? { ...agent, cwd: group.cwd } : agent;
+  const r = await runOnce({
+    chat: group,
+    agent: worker,
+    sessionId: group.memberSessions[agent.id],
+    systemPrompt: groupSystemPrompt(group, agent, members),
+    prompt: transcript || 'Continue.',
+    from: { id: agent.id, name: agent.name, avatar: agent.avatar, color: agent.color },
+  });
+  if (r.sessionId) group.memberSessions[agent.id] = r.sessionId;
+  return group.messages.slice(start).filter((m) => m.role === 'assistant' && m.from?.id === agent.id).map((m) => m.text).join('\n');
 }
 
 async function runGroupTurn(group, userMsg) {
@@ -881,25 +964,34 @@ async function runGroupTurn(group, userMsg) {
     pushMessage(group, { role: 'system', text: 'This group has no agents. Add some in the group info.' });
     return;
   }
-  let responders = mentioned(userMsg.text, members);
-  if (!responders.length) responders = members;
+  // The user's @mentions pick who starts; no mention means everyone.
+  let queue = mentioned(userMsg.text, members);
+  if (!queue.length) queue = [...members];
 
-  for (const agent of responders) {
-    if (stopFlags.has(group.id)) break;
-    const cursor = group.memberCursor[agent.id] || 0;
-    const fresh = group.messages.slice(cursor).filter((m) =>
-      m.role === 'user' || (m.role === 'assistant' && m.from?.id !== agent.id && !m.streaming));
-    const transcript = fresh.map((m) => `${m.role === 'user' ? 'User' : m.from?.name || 'Agent'}: ${m.role === 'user' ? promptFor(m) : m.text}`).join('\n\n');
-    group.memberCursor[agent.id] = group.messages.length;
-    const r = await runOnce({
-      chat: group,
-      agent,
-      sessionId: group.memberSessions[agent.id],
-      systemPrompt: groupSystemPrompt(group, agent, members),
-      prompt: transcript || 'Continue.',
-      from: { id: agent.id, name: agent.name, avatar: agent.avatar, color: agent.color },
+  // Team talk: agents' own @mentions bring teammates in, up to a limit per user message
+  // so a back-and-forth can't run away with your usage.
+  const limit = Math.max(1, Math.min(50, group.maxTurns || 12));
+  let handoffs = 0;
+  const waiting = new Set();
+
+  while (queue.length && !stopFlags.has(group.id)) {
+    const batch = group.parallel ? [...new Set(queue.splice(0))] : [queue.shift()];
+    const replies = await Promise.all(batch.map((a) => memberTurn(group, a, members)));
+    if (!group.teamTalk) continue;
+    batch.forEach((speaker, i) => {
+      for (const m of mentioned(replies[i], members)) {
+        if (m.id === speaker.id || queue.includes(m)) continue;
+        if (handoffs >= limit) { waiting.add(m.name); continue; }
+        queue.push(m);
+        handoffs++;
+      }
     });
-    if (r.sessionId) group.memberSessions[agent.id] = r.sessionId;
+  }
+  if (waiting.size && !stopFlags.has(group.id)) {
+    pushMessage(group, {
+      role: 'system',
+      text: `Paused the team after ${limit} hand-offs to save usage. Still waiting on: ${[...waiting].map((n) => '@' + n).join(', ')}. Send a message to keep going, or raise the limit in the group info.`,
+    });
   }
 }
 
@@ -981,6 +1073,9 @@ function applySettings(chat, body) {
   if (typeof body.muted === 'boolean') chat.muted = body.muted;
   if (typeof body.fullAccess === 'boolean') chat.fullAccess = body.fullAccess;
   if (Array.isArray(body.members)) chat.members = body.members.filter((id) => findChat(id)?.type === 'agent');
+  if (typeof body.teamTalk === 'boolean') chat.teamTalk = body.teamTalk;
+  if (typeof body.parallel === 'boolean') chat.parallel = body.parallel;
+  if (body.maxTurns !== undefined && Number.isFinite(+body.maxTurns)) chat.maxTurns = Math.max(1, Math.min(50, Math.round(+body.maxTurns)));
   if (typeof body.sessionId === 'string') {
     const s = body.sessionId.trim();
     if (!s || /^[0-9a-f-]{36}$/i.test(s)) chat.sessionId = s || null;
@@ -1136,7 +1231,10 @@ const server = http.createServer(async (req, res) => {
           permissionMode: 'smart',
           allowRules: [],
           fullAccess: true,
-          cwd: os.homedir(),
+          cwd: isGroup ? '' : os.homedir(), // groups: '' = each agent works in its own folder
+          teamTalk: isGroup,
+          parallel: false,
+          maxTurns: 12,
           systemPrompt: '',
           sessionId: null,
           members: [],
@@ -1150,7 +1248,14 @@ const server = http.createServer(async (req, res) => {
           messages: [],
         };
         applySettings(chat, body);
-        if (isGroup) pushMessage(chat, { role: 'system', text: `Group created. Messages go to every agent in turn; @mention names to ask only some of them.` });
+        if (isGroup) {
+          const how = [
+            chat.parallel ? 'Everyone you message works at the same time.' : 'Agents answer one at a time.',
+            chat.teamTalk ? 'Team talk is on: agents @mention each other to hand off work, like a real team.' : '',
+            chat.cwd ? `Shared project folder: ${chat.cwd}` : '',
+          ].filter(Boolean).join(' ');
+          pushMessage(chat, { role: 'system', text: `Group created. ${how} @mention names to talk to only some of them.` });
+        }
         db.chats.push(chat);
         save();
         broadcast({ type: 'chat', chat: summary(chat) });
@@ -1173,7 +1278,7 @@ const server = http.createServer(async (req, res) => {
       if (!sub && req.method === 'DELETE') {
         stopFlags.add(chat.id);
         queues.delete(chat.id);
-        runs.get(chat.id)?.proc.kill();
+        killRuns(chat.id);
         expireApprovals(chat.id);
         db.chats = db.chats.filter((c) => c !== chat);
         for (const g of db.chats) if (g.type === 'group') g.members = g.members.filter((m) => m !== chat.id);
@@ -1205,8 +1310,7 @@ const server = http.createServer(async (req, res) => {
 
       if (sub === 'stop' && req.method === 'POST') {
         if (busy.has(chat.id)) stopFlags.add(chat.id);
-        const run = runs.get(chat.id);
-        if (run) { run.stopped = true; run.proc.kill(); }
+        killRuns(chat.id);
         expireApprovals(chat.id);
         return json(res, 200, { ok: true });
       }
@@ -1215,7 +1319,7 @@ const server = http.createServer(async (req, res) => {
       if (sub === 'reset' && req.method === 'POST') {
         stopFlags.add(chat.id);
         queues.delete(chat.id);
-        runs.get(chat.id)?.proc.kill();
+        killRuns(chat.id);
         expireApprovals(chat.id);
         chat.sessionId = null;
         chat.memberSessions = {};
@@ -1241,7 +1345,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 function shutdown() {
-  for (const r of runs.values()) { try { r.proc.kill(); } catch {} }
+  for (const chatId of runs.keys()) killRuns(chatId);
   try { saveNow(); } catch {}
   process.exit(0);
 }
