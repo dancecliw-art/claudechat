@@ -56,6 +56,8 @@
   const THEMES = [
     ['dark', 'WhatsApp dark', ['#111b21', '#005c4b', '#00a884']],
     ['light', 'WhatsApp light', ['#ffffff', '#d9fdd3', '#008069']],
+    ['claude', 'Claude', ['#f5f4ee', '#faf9f5', '#c96442']],
+    ['claude-dark', 'Claude dark', ['#1f1e1d', '#262624', '#d97757']],
     ['discord', 'Discord', ['#2b2d31', '#313338', '#5865f2']],
     ['dracula', 'Dracula', ['#21222c', '#44475a', '#bd93f9']],
     ['nord', 'Nord', ['#2e3440', '#4c566a', '#88c0d0']],

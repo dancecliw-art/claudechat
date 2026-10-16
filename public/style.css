@@ -1,6 +1,6 @@
-/* ClaudeChat — WhatsApp-inspired look, dark by default. Other themes (light, Discord, Dracula,
-   Nord, Midnight, Sakura, Terminal) only swap the color tokens below; Discord also changes the
-   message layout (see the end of this file). */
+/* ClaudeChat — WhatsApp-inspired look, dark by default. Other themes (light, Claude, Discord,
+   Dracula, Nord, Midnight, Sakura, Terminal) only swap the color tokens below; Claude and Discord also change
+   the message layout (see the end of this file). */
 :root {
   --bg: #0b141a;
   --panel: #111b21;
@@ -53,6 +53,58 @@
   color-scheme: light;
 }
 
+:root[data-theme="claude"] {
+  --bg: #f0eee6;
+  --panel: #f5f4ee;
+  --panel-2: #f5f4ee;
+  --hover: #ebe9e0;
+  --active: #e6e3d9;
+  --border: #e3e0d6;
+  --text: #29261b;
+  --text-2: #7b776c;
+  --accent: #c96442;
+  --accent-text: #ffffff;
+  --out: #ece9e0;
+  --in: transparent;
+  --tick-read: #c96442;
+  --sys: #f0ece1;
+  --sys-text: #7b5a2e;
+  --tool-bg: rgba(41, 38, 27, 0.04);
+  --code-bg: rgba(41, 38, 27, 0.06);
+  --wall: #faf9f5;
+  --doodle: transparent;
+  --unread: #c96442;
+  --danger: #b5432a;
+  --pill-model: #c96442;
+  --shadow: 0 4px 20px rgba(41, 38, 27, 0.08);
+  color-scheme: light;
+}
+:root[data-theme="claude-dark"] {
+  --bg: #1f1e1d;
+  --panel: #1f1e1d;
+  --panel-2: #1f1e1d;
+  --hover: #2b2a28;
+  --active: #31302e;
+  --border: #353431;
+  --text: #ece9e0;
+  --text-2: #9c9a92;
+  --accent: #d97757;
+  --accent-text: #ffffff;
+  --out: #141413;
+  --in: transparent;
+  --tick-read: #d97757;
+  --sys: #2b2a28;
+  --sys-text: #e0b97e;
+  --tool-bg: rgba(0, 0, 0, 0.22);
+  --code-bg: rgba(0, 0, 0, 0.28);
+  --wall: #262624;
+  --doodle: transparent;
+  --unread: #d97757;
+  --danger: #e5604a;
+  --pill-model: #d97757;
+  --shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  color-scheme: dark;
+}
 :root[data-theme="discord"] {
   --bg: #1e1f22;
   --panel: #2b2d31;
@@ -530,6 +582,34 @@ dialog .settings { padding: 8px 20px; }
 [data-theme="discord"] .chat-item { margin: 1px 8px; border-radius: 6px; }
 [data-theme="discord"] .chat-item .meta { border-bottom: 0; }
 [data-theme="discord"] .chat-item.active { background: var(--active); }
+
+/* ---- Claude theme: like the Claude desktop app. One centered column, flat serif replies,
+   rounded user messages, a big rounded composer. ---- */
+:root:is([data-theme="claude"], [data-theme="claude-dark"]) body { font-family: "Styrene B", "Anthropic Sans", -apple-system, "Segoe UI", system-ui, sans-serif; }
+:is([data-theme="claude"], [data-theme="claude-dark"]) .messages { padding: 20px max(20px, calc((100% - 760px) / 2)) 12px; gap: 4px; }
+:is([data-theme="claude"], [data-theme="claude-dark"]) .msg { max-width: 100%; }
+:is([data-theme="claude"], [data-theme="claude-dark"]) .msg.out { max-width: 82%; }
+:is([data-theme="claude"], [data-theme="claude-dark"]) .msg + .msg.first { margin-top: 18px; }
+:is([data-theme="claude"], [data-theme="claude-dark"]) .bubble { box-shadow: none; border-radius: 16px; }
+:is([data-theme="claude"], [data-theme="claude-dark"]) .msg.first .bubble::before { display: none; }
+:is([data-theme="claude"], [data-theme="claude-dark"]) .msg.first.out .bubble, :is([data-theme="claude"], [data-theme="claude-dark"]) .msg.first.in .bubble { border-radius: 16px; }
+:is([data-theme="claude"], [data-theme="claude-dark"]) .out .bubble { padding: 10px 16px; }
+:is([data-theme="claude"], [data-theme="claude-dark"]) .in .bubble { padding: 4px 0; }
+:is([data-theme="claude"], [data-theme="claude-dark"]) .in .bubble .text { font-family: "Copernicus", "Tiempos Text", Georgia, "Times New Roman", serif; font-size: 16px; line-height: 1.6; }
+:is([data-theme="claude"], [data-theme="claude-dark"]) .in .stamp { float: none; display: flex; justify-content: flex-start; margin: 4px 0 0; top: 0; opacity: 0.7; }
+:is([data-theme="claude"], [data-theme="claude-dark"]) .bubble .text pre { border-radius: 10px; border: 1px solid var(--border); }
+:is([data-theme="claude"], [data-theme="claude-dark"]) .tool details, :is([data-theme="claude"], [data-theme="claude-dark"]) .tool-run { background: var(--panel); box-shadow: none; border: 1px solid var(--border); border-radius: 10px; }
+:is([data-theme="claude"], [data-theme="claude-dark"]) .approval { border-radius: 12px; }
+:is([data-theme="claude"], [data-theme="claude-dark"]) .day, :is([data-theme="claude"], [data-theme="claude-dark"]) .sys { box-shadow: none; }
+:is([data-theme="claude"], [data-theme="claude-dark"]) .composer-wrap { background: var(--wall); padding: 0 max(12px, calc((100% - 790px) / 2)) 14px; }
+:is([data-theme="claude"], [data-theme="claude-dark"]) .composer { background: var(--panel); border: 1px solid var(--border); border-radius: 20px; padding: 8px 10px; box-shadow: var(--shadow); }
+:is([data-theme="claude"], [data-theme="claude-dark"]) .input-box { background: transparent; padding: 9px 4px; }
+:is([data-theme="claude"], [data-theme="claude-dark"]) .send { border-radius: 10px; width: 38px; height: 38px; }
+:is([data-theme="claude"], [data-theme="claude-dark"]) .chat-head { background: var(--wall); border-bottom: 1px solid var(--border); }
+:is([data-theme="claude"], [data-theme="claude-dark"]) .chat-item { margin: 1px 8px; border-radius: 10px; height: 64px; }
+:is([data-theme="claude"], [data-theme="claude-dark"]) .chat-item .meta { border-bottom: 0; }
+:is([data-theme="claude"], [data-theme="claude-dark"]) .search, :is([data-theme="claude"], [data-theme="claude-dark"]) .chip { border: 1px solid var(--border); }
+:is([data-theme="claude"], [data-theme="claude-dark"]) .brand { font-family: "Copernicus", "Tiempos Text", Georgia, serif; font-weight: 500; }
 
 @media (max-width: 900px) {
   .app { grid-template-columns: 1fr; }

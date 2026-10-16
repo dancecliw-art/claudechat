@@ -81,7 +81,7 @@ If the [Antigravity](https://antigravity.google) CLI (`agy`) is installed, pick 
 - **Search in a chat** (🔍 in the header, or Ctrl+F): highlights every match. Enter steps to older matches and Shift+Enter to newer ones.
 - **Starred messages:** hover a message and press ☆. The ★ button in the sidebar lists starred messages from every chat, and clicking one jumps to it.
 - **Prompt templates:** type `/` at the start of a message for `/review`, `/test`, `/explain`, `/fix`, `/commit` and `/plan`. Pick one with Enter or Tab to fill in a ready-made prompt you can still edit.
-- **Themes:** the 🌙 button picks a theme: WhatsApp dark or light, **Discord** (flat, left-aligned messages like a Discord channel), Dracula, Nord, Midnight (pure black for OLED screens), Sakura and Terminal. Your choice is remembered.
+- **Themes:** the 🌙 button picks a theme: WhatsApp dark or light, **Claude** and **Claude dark** (like the Claude desktop app: warm colors, flat serif replies in a centered column, a big rounded message box), **Discord** (flat, left-aligned messages like a Discord channel), Dracula, Nord, Midnight (pure black for OLED screens), Sakura and Terminal. Your choice is remembered.
 - **Per-agent stats:** the agent info panel shows the agent's turns, tokens and estimated cost, including its work in groups.
 
 ### New in v2
