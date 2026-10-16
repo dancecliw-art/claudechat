@@ -433,7 +433,46 @@
     el.scrollTop = el.scrollHeight;
   }
 
+  // Consecutive tool steps fold into one compact row ("4 steps · Bash, Edit"); click to expand.
+  // Approval cards and messages break a run, so they always stay visible.
+  const openRuns = new Set(); // id of the first step of each expanded run
+  function compactTools() {
+    const el = $('#messages');
+    el.querySelectorAll('.tool-run').forEach((n) => n.remove());
+    let run = [];
+    const flush = () => {
+      if (run.length >= 2) {
+        const key = run[0].dataset.id;
+        const open = openRuns.has(key);
+        const steps = run.map((n) => activeMessages.find((m) => m.id === n.dataset.id)?.tool).filter(Boolean);
+        const state = steps.some((t) => t.status === 'running') ? 'running' : steps.some((t) => t.status === 'error') ? 'error' : 'done';
+        const names = [...new Set(steps.map((t) => t.name))];
+        const who = activeMessages.find((m) => m.id === key)?.from;
+        const row = document.createElement('div');
+        row.className = 'tool-run' + (open ? ' open' : '');
+        row.dataset.run = key;
+        row.innerHTML = `<span class="tstate ${state}">${state === 'running' ? '<span class="spin"></span>' : state === 'error' ? '!' : '✓'}</span>` +
+          `${who ? `<span class="who">${esc(who.avatar)}</span>` : ''}<b>${run.length} steps</b><span class="targ">${esc(names.slice(0, 4).join(', '))}${names.length > 4 ? '…' : ''}</span><span class="chev">${open ? '▾' : '▸'}</span>`;
+        run[0].before(row);
+        for (const n of run) n.classList.toggle('folded', !open);
+      } else for (const n of run) n.classList.remove('folded');
+      run = [];
+    };
+    for (const n of el.children) {
+      if (n.classList.contains('tool')) run.push(n);
+      else if (!n.classList.contains('typing-bubble')) flush();
+    }
+    flush();
+  }
+  $('#messages').addEventListener('click', (e) => {
+    const r = e.target.closest('.tool-run');
+    if (!r) return;
+    if (openRuns.has(r.dataset.run)) openRuns.delete(r.dataset.run); else openRuns.add(r.dataset.run);
+    compactTools();
+  });
+
   function renderTyping() {
+    compactTools();
     const el = $('#messages');
     el.querySelector('.typing-bubble')?.remove();
     const c = chats.get(activeId);

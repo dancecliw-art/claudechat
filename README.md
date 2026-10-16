@@ -70,7 +70,7 @@ If the [Antigravity](https://antigravity.google) CLI (`agy`) is installed, pick 
 
 - Each chat runs its CLI (`claude -p`, `codex app-server` or `agy`) in its own **working folder**, with that chat's **model**, **effort** and **permission mode**, and resumes its own session, so every agent keeps its memory between messages.
 - The pill in the chat header (e.g. `Opus 5.5  High  ◔`) switches model and effort. The ring fills as effort goes up. The change applies from the next message.
-- Tool calls (Bash, Edit, Read…) show up as collapsible cards. Click one to see its input and output.
+- Tool calls (Bash, Edit, Read…) show up as collapsible cards. Click one to see its input and output. Several steps in a row fold into one compact row ("5 steps · Bash, Read, Edit"); click it to expand them.
 - The 📣 button broadcasts one message to several agents at once.
 - Unread badges, a "typing…" status, blue ticks when an agent has answered, a sound when an agent you aren't looking at finishes, and desktop notifications when the tab is in the background.
 - The ⋮ menu has per-agent settings: name, avatar, folder, permissions, custom instructions, pin, new session and delete.
