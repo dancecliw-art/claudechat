@@ -129,12 +129,16 @@ const COLORS = ['#25d366', '#53bdeb', '#ff8a65', '#c792ea', '#ffcb6b', '#f07178'
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 // The packaged exe has no console window, so its output goes to data/claudechat.log.
+// Appended, never overwritten, so a second launch can't wipe the running copy's log.
 if (sea) {
   const util = require('util');
-  const log = fs.createWriteStream(path.join(DATA_DIR, 'claudechat.log'), { flags: 'w' });
-  const write = (...a) => log.write(`[${new Date().toLocaleTimeString()}] ${util.format(...a)}\n`);
+  const logFile = path.join(DATA_DIR, 'claudechat.log');
+  try { if (fs.statSync(logFile).size > 1e6) fs.renameSync(logFile, logFile + '.old'); } catch {}
+  const log = fs.createWriteStream(logFile, { flags: 'a' });
+  const write = (...a) => log.write(`[${new Date().toLocaleString()}] [${process.pid}] ${util.format(...a)}\n`);
   console.log = console.info = console.warn = console.error = write;
   process.on('uncaughtException', (e) => { write('Uncaught:', e && e.stack || e); });
+  process.on('unhandledRejection', (e) => { write('Unhandled rejection:', e && e.stack || e); });
 }
 
 let db = { chats: [], usage: null, costLog: [] };
@@ -1285,27 +1289,32 @@ function openAppWindow() {
   ], { stdio: 'ignore' });
 }
 
-let lastClientAt = now();
+// Quit when no ClaudeChat window has been connected for a while. This watches the page's own
+// live connection, not the browser process: Chrome/Edge often hand the window to another
+// process or restart themselves, and the old process-exit check killed the server while the
+// window was still open.
+const STARTUP_GRACE = 45000; // a cold browser start can take a while to connect
+const IDLE_GRACE = 15000; // reloads and brief reconnects stay well under this
+let lastClientAt = now() + STARTUP_GRACE - IDLE_GRACE;
 function watchWindow(win) {
-  const started = now();
-  if (win) {
-    win.on('exit', () => {
-      // An instant exit means the window was handed to an already-running instance;
-      // the idle check below then decides when to quit.
-      if (now() - started > 4000) { console.log('App window closed, quitting.'); shutdown(); }
-    });
-  }
-  // Safety net: quit when no window has been connected for a minute and nothing is running.
+  if (win) win.on('exit', (code) => console.log(`Window process exited (code ${code}); ClaudeChat quits once no window is connected.`));
   setInterval(() => {
     if (clients.size) { lastClientAt = now(); return; }
-    if (busy.size || runs.size) return;
-    if (now() - lastClientAt > 60000) { console.log('No window open, quitting.'); shutdown(); }
-  }, 10000).unref();
+    // An agent still working in the background finishes before ClaudeChat quits, unless it's
+    // stuck waiting for an approval that nobody is there to give.
+    if ((busy.size || runs.size) && approvals.size === 0) return;
+    if (now() - lastClientAt > IDLE_GRACE) { console.log('No ClaudeChat window connected, quitting.'); shutdown(); }
+  }, 5000).unref();
 }
 
 server.on('error', (e) => {
   // Starting ClaudeChat again while it runs just opens another window of the running app.
-  if (e.code === 'EADDRINUSE' && APP_MODE) { openAppWindow(); setTimeout(() => process.exit(0), 1500); return; }
+  if (e.code === 'EADDRINUSE' && APP_MODE) {
+    console.log('ClaudeChat is already running; opening another window for it.');
+    openAppWindow();
+    setTimeout(() => process.exit(0), 1500);
+    return;
+  }
   throw e;
 });
 
