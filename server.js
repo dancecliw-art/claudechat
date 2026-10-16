@@ -1417,6 +1417,7 @@ function applySettings(chat, body) {
   if (typeof body.systemPrompt === 'string') chat.systemPrompt = body.systemPrompt.slice(0, 8000);
   if (typeof body.pinned === 'boolean') chat.pinned = body.pinned;
   if (typeof body.muted === 'boolean') chat.muted = body.muted;
+  if (typeof body.archived === 'boolean') chat.archived = body.archived;
   if (typeof body.fullAccess === 'boolean') chat.fullAccess = body.fullAccess;
   if (Array.isArray(body.members)) chat.members = body.members.filter((id) => findChat(id)?.type === 'agent');
   if (typeof body.teamTalk === 'boolean') chat.teamTalk = body.teamTalk;
@@ -1628,6 +1629,17 @@ const server = http.createServer(async (req, res) => {
         save();
         broadcast({ type: 'chat', chat: summary(chat) });
         return json(res, 200, summary(chat));
+      }
+
+      // A new agent with the same settings (no messages, no memory).
+      if (sub === 'duplicate' && req.method === 'POST') {
+        const keep = ['type', 'avatar', 'color', 'provider', 'model', 'effort', 'permissionMode', 'allowRules', 'fullAccess', 'cwd', 'teamTalk', 'parallel', 'maxTurns', 'systemPrompt', 'members'];
+        const copy = { id: uid(), name: `${chat.name} (copy)`.slice(0, 60), sessionId: null, memberSessions: {}, memberCursor: {}, createdAt: now(), updatedAt: now(), totalCost: 0, pinned: false, muted: false, messages: [] };
+        for (const k of keep) if (chat[k] !== undefined) copy[k] = JSON.parse(JSON.stringify(chat[k]));
+        db.chats.push(copy);
+        save();
+        broadcast({ type: 'chat', chat: summary(copy) });
+        return json(res, 201, summary(copy));
       }
 
       if (!sub && req.method === 'DELETE') {

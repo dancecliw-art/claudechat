@@ -77,6 +77,18 @@ If the [Antigravity](https://antigravity.google) CLI (`agy`) is installed, pick 
 
 ### New in v2.1
 
+- **Drafts:** a half-typed message stays in its chat when you switch away or reload.
+- **Jump to latest:** a ↓ button appears when you scroll up, counting new replies.
+- **Edit & resend** (✎ on your messages) puts the text back in the box to change and send again.
+- **Ask again** (↻ on a reply) resends your last message so the agent has another go.
+- **Read aloud** (🔊 on a reply) speaks it, using the browser's voice. Press again to stop.
+- **Archive chats** from the info panel. They leave the list and wait under the **Archived** filter.
+- **Duplicate agent** makes a copy with the same settings and a fresh memory.
+- **Provider filters:** Claude, Codex and Antigravity chips above the chat list.
+- **Your own templates:** pick “Your templates…” in the `/` menu to save prompts like `/docs`.
+- **Text size:** small, normal or large, in the 🌙 menu.
+- **Keyboard shortcuts:** Ctrl+/ lists them all, and Alt+↑/↓ moves between chats.
+
 - **Ctrl+K quick switcher:** jump to any chat by typing part of its name. ↑↓ and Enter work.
 - **Search in a chat** (🔍 in the header, or Ctrl+F): highlights every match. Enter steps to older matches and Shift+Enter to newer ones.
 - **Starred messages:** hover a message and press ☆. The ★ button in the sidebar lists starred messages from every chat, and clicking one jumps to it.

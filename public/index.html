@@ -51,6 +51,10 @@
         <button class="chip" data-filter="unread">Unread</button>
         <button class="chip" data-filter="groups">Groups</button>
         <button class="chip" data-filter="pinned">Pinned</button>
+        <button class="chip" data-filter="p:claude">Claude</button>
+        <button class="chip" data-filter="p:codex">Codex</button>
+        <button class="chip" data-filter="p:antigravity">Antigravity</button>
+        <button class="chip" data-filter="archived">Archived</button>
       </div>
     </div>
 
@@ -155,6 +159,9 @@
 
       <div class="messages" id="messages"></div>
       <div class="drop-hint" id="dropHint" hidden>Drop files to attach</div>
+      <button type="button" class="jump" id="btnJump" title="Jump to latest" aria-label="Jump to latest" hidden>
+        <svg viewBox="0 0 24 24"><path d="M7.4 8.6 12 13.2l4.6-4.6L18 10l-6 6-6-6z"/></svg><span id="jumpCount" hidden></span>
+      </button>
 
       <footer class="composer-wrap">
         <div class="reply-bar" id="replyBar" hidden>
@@ -202,6 +209,8 @@
       <div class="danger-zone">
         <button class="row-btn" id="btnPin">📌 Pin chat</button>
         <button class="row-btn" id="btnMute">🔕 Mute notifications</button>
+        <button class="row-btn" id="btnArchive">🗄️ Archive chat</button>
+        <button class="row-btn" id="btnDuplicate">🧬 Duplicate agent</button>
         <button class="row-btn" id="btnExport">📤 Export chat</button>
         <button class="row-btn" id="btnReset">🔄 New session (clear memory)</button>
         <button class="row-btn danger" id="btnDelete">🗑️ Delete</button>
@@ -289,7 +298,7 @@
   <form method="dialog" id="switcherForm">
     <input id="swInput" placeholder="Jump to a chat…" autocomplete="off" spellcheck="false">
     <ul class="sw-list" id="swList"></ul>
-    <div class="sw-hint">↑↓ to move · Enter to open · Esc to close</div>
+    <div class="sw-hint">↑↓ to move · Enter to open · Esc to close · Ctrl+/ for all shortcuts</div>
   </form>
 </dialog>
 
@@ -301,6 +310,42 @@
     <div class="dialog-actions">
       <button value="cancel" class="ghost" formnovalidate>Close</button>
     </div>
+  </form>
+</dialog>
+
+<!-- ============ Your prompt templates ============ -->
+<dialog id="tplDialog" class="wide">
+  <form method="dialog" id="tplForm">
+    <h2>📝 Prompt templates</h2>
+    <p class="muted">Type <b>/</b> in a message to use these. Yours sit next to the built-in ones.</p>
+    <ul class="tpl-list" id="tplList"></ul>
+    <div class="settings">
+      <label class="field"><span>Command</span><input id="tplName" placeholder="e.g. docs" maxlength="24" spellcheck="false" autocomplete="off"></label>
+      <label class="field"><span>Prompt</span><textarea id="tplText" rows="3" placeholder="e.g. Update the README for the changes we just made."></textarea></label>
+    </div>
+    <div class="dialog-actions">
+      <button type="button" class="ghost" id="tplAdd">＋ Add template</button>
+      <button value="cancel" class="primary" formnovalidate>Done</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ============ Keyboard shortcuts ============ -->
+<dialog id="keysDialog">
+  <form method="dialog">
+    <h2>⌨️ Keyboard shortcuts</h2>
+    <dl class="keys">
+      <dt><kbd>Ctrl</kbd> <kbd>K</kbd></dt><dd>Jump to a chat</dd>
+      <dt><kbd>Alt</kbd> <kbd>↑</kbd> / <kbd>↓</kbd></dt><dd>Previous / next chat</dd>
+      <dt><kbd>Ctrl</kbd> <kbd>F</kbd></dt><dd>Search this chat</dd>
+      <dt><kbd>Enter</kbd></dt><dd>Send</dd>
+      <dt><kbd>Shift</kbd> <kbd>Enter</kbd></dt><dd>New line</dd>
+      <dt><kbd>/</kbd></dt><dd>Prompt templates (at the start of a message)</dd>
+      <dt><kbd>@</kbd></dt><dd>Mention an agent (in groups)</dd>
+      <dt><kbd>Esc</kbd></dt><dd>Close menus, search, reply</dd>
+      <dt><kbd>Ctrl</kbd> <kbd>/</kbd></dt><dd>This list</dd>
+    </dl>
+    <div class="dialog-actions"><button value="cancel" class="primary">Got it</button></div>
   </form>
 </dialog>
 

@@ -173,6 +173,18 @@ test('Stop while an approval is pending ends the turn and expires the card', asy
   assert.ok(c.messages.some((m) => m.role === 'system' && m.text === 'Stopped.'));
 });
 
+test('an agent can be duplicated (same settings, fresh memory) and archived', async () => {
+  const copy = await call('POST', `/chats/${agent.id}/duplicate`);
+  assert.strictEqual(copy.name, 'Codey (copy)');
+  assert.deepStrictEqual([copy.provider, copy.model, copy.cwd, copy.permissionMode], ['codex', 'gpt-5.5', WORK, 'smart']);
+  assert.strictEqual(copy.sessionId, null);
+  assert.strictEqual(copy.messageCount, 0);
+  const archived = await call('PATCH', `/chats/${copy.id}`, { archived: true });
+  assert.strictEqual(archived.archived, true);
+  const list = await call('GET', '/chats');
+  assert.strictEqual(list.find((c) => c.id === copy.id).archived, true);
+});
+
 test('messages can be starred and show up in the starred list', async () => {
   const c = await call('GET', `/chats/${agent.id}`);
   const reply = c.messages.find((m) => m.role === 'assistant');

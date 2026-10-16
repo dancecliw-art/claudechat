@@ -43,6 +43,7 @@
   let pendingAtts = [];   // [{ id, name, type, preview, uploaded?: {path,url,...} }]
   let replyTo = null;     // { id, name, text, color }
   let usage = null;
+  let drafts = load('cc-drafts', {}); // unsent text per chat
 
   function load(key, fallback) {
     try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
@@ -72,12 +73,18 @@
   }
   const savedTheme = load('cc-theme', null);
   applyTheme(savedTheme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
+  const SIZES = [['small', 'A', 'Small text'], ['normal', 'A', 'Normal text'], ['large', 'A', 'Large text']];
+  function applySize(sz) { document.documentElement.dataset.size = SIZES.some((x) => x[0] === sz) ? sz : 'normal'; }
+  applySize(load('cc-size', 'normal'));
   function renderThemes() {
     const cur = document.documentElement.dataset.theme;
+    const size = document.documentElement.dataset.size;
     $('#themePop').innerHTML = '<div class="pop-label" style="padding-top:2px">Theme</div>' + THEMES.map(([id, name, sw]) => `
       <button type="button" class="theme-opt ${id === cur ? 'sel' : ''}" data-theme-id="${id}">
         <span class="swatch">${sw.map((c) => `<i style="background:${c}"></i>`).join('')}</span>${name}<span class="check">✓</span>
-      </button>`).join('');
+      </button>`).join('') +
+      `<div class="pop-label">Text size</div><div class="size-row">${SIZES.map(([id, label, title]) =>
+        `<button type="button" class="size-${id} ${id === size ? 'sel' : ''}" data-size-id="${id}" title="${title}">${label}</button>`).join('')}</div>`;
   }
   $('#btnTheme').onclick = (e) => {
     e.stopPropagation();
@@ -87,6 +94,8 @@
   };
   $('#themePop').onclick = (e) => {
     e.stopPropagation();
+    const sz = e.target.closest('[data-size-id]');
+    if (sz) { applySize(sz.dataset.sizeId); store('cc-size', sz.dataset.sizeId); return renderThemes(); }
     const b = e.target.closest('[data-theme-id]');
     if (!b) return;
     applyTheme(b.dataset.themeId);
@@ -223,6 +232,9 @@
       if (filter === 'unread' && !unread[c.id]) return false;
       if (filter === 'pinned' && !c.pinned) return false;
       if (filter === 'groups' && c.type !== 'group') return false;
+      // Archived chats only show under "Archived"; provider chips show that provider's agents.
+      if ((filter === 'archived') !== !!c.archived) return false;
+      if (filter.startsWith('p:') && (c.type === 'group' || providerOf(c) !== filter.slice(2))) return false;
       if (q && !(c.name.toLowerCase().includes(q) || (c.lastMessage?.text || '').toLowerCase().includes(q))) return false;
       return true;
     });
@@ -288,7 +300,14 @@
   }
 
   async function openChat(id, gotoId) {
-    if (activeId !== id) { clearReply(); clearAtts(); }
+    if (activeId !== id) {
+      clearReply();
+      clearAtts();
+      input.value = drafts[id] || '';
+      autosize();
+      syncSendButton();
+      hideJump();
+    }
     activeId = id;
     unread[id] = 0;
     store('cc-unread', unread);
@@ -386,6 +405,8 @@
           <button type="button" data-act="reply" title="Reply">↩</button>
           <button type="button" data-act="copy" title="Copy">⧉</button>
           <button type="button" data-act="star" title="${m.starred ? 'Unstar' : 'Star'}">${m.starred ? '★' : '☆'}</button>
+          ${out ? '<button type="button" data-act="edit" title="Edit and send again">✎</button>'
+            : `<button type="button" data-act="speak" title="Read aloud">🔊</button><button type="button" data-act="regen" title="Ask again (resend your last message)">↻</button>`}
         </div>
         <div class="bubble">
           ${sender}
@@ -526,6 +547,7 @@
     el.insertAdjacentHTML('beforeend', messageHtml(m, prev));
     renderTyping();
     if (stick || m.role === 'user') scrollBottom(true);
+    else if (m.role === 'assistant' || m.role === 'approval') bumpJump();
   }
 
   function replaceMessage(m) {
@@ -585,6 +607,16 @@
       const m = activeMessages.find((x) => x.id === id);
       if (!m) return;
       if (act.dataset.act === 'copy') copyText(m.text);
+      if (act.dataset.act === 'edit') {
+        input.value = m.text || '';
+        autosize();
+        syncSendButton();
+        saveDraft();
+        input.focus();
+        input.selectionStart = input.selectionEnd = input.value.length;
+      }
+      if (act.dataset.act === 'regen') regenerate();
+      if (act.dataset.act === 'speak') speak(m);
       if (act.dataset.act === 'star') api('PATCH', `/chats/${activeId}/messages/${m.id}`, { starred: !m.starred }).catch((err) => toast(err.message));
       if (act.dataset.act === 'reply') {
         const c = chats.get(activeId);
@@ -614,7 +646,7 @@
     $('#btnSend').hidden = !hasContent && !!Speech;
     $('#btnMic').hidden = !!hasContent || !Speech;
   }
-  input.addEventListener('input', () => { autosize(); syncSendButton(); updateMentions(); updateSlash(); });
+  input.addEventListener('input', () => { autosize(); syncSendButton(); updateMentions(); updateSlash(); saveDraft(); });
   input.addEventListener('keydown', (e) => {
     if (handleSlashKeys(e)) return;
     if (handleMentionKeys(e)) return;
@@ -634,6 +666,7 @@
       replyTo: replyTo ? { id: replyTo.id, name: replyTo.name, text: replyTo.text } : undefined,
     };
     input.value = '';
+    saveDraft();
     autosize();
     clearAtts();
     clearReply();
@@ -794,6 +827,52 @@
     if (b) insertMention(mentionList[+b.dataset.i]);
   };
 
+  // ---------- drafts, jump-to-latest, ask again, read aloud ----------
+  let draftTimer;
+  function saveDraft() {
+    if (!activeId) return;
+    if (input.value.trim()) drafts[activeId] = input.value; else delete drafts[activeId];
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(() => store('cc-drafts', drafts), 300);
+  }
+
+  let jumpCount = 0;
+  function hideJump() { jumpCount = 0; $('#btnJump').hidden = true; $('#jumpCount').hidden = true; }
+  function bumpJump() {
+    jumpCount++;
+    $('#jumpCount').textContent = jumpCount;
+    $('#jumpCount').hidden = false;
+    $('#btnJump').hidden = false;
+  }
+  $('#btnJump').onclick = () => { scrollBottom(true); hideJump(); };
+  $('#messages').addEventListener('scroll', () => {
+    if (nearBottom()) hideJump();
+    else if ($('#btnJump').hidden) $('#btnJump').hidden = false;
+  }, { passive: true });
+
+  // Sends your latest message again, so the agent has another go.
+  async function regenerate() {
+    const last = [...activeMessages].reverse().find((m) => m.role === 'user');
+    if (!last) return toast('Nothing to resend yet.');
+    try {
+      await api('POST', `/chats/${activeId}/messages`, { text: last.text, attachments: last.attachments || [] });
+    } catch (e) { toast(e.message); }
+  }
+
+  let speaking = null;
+  function speak(m) {
+    if (!('speechSynthesis' in window)) return toast('Read aloud isn’t supported in this browser.');
+    speechSynthesis.cancel();
+    if (speaking === m.id) { speaking = null; return; }
+    // Code blocks and markdown symbols read badly, so they're left out.
+    const text = String(m.text || '').replace(/```[\s\S]*?```/g, ' (code) ').replace(/[#*_`>|]/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = navigator.language || 'en-US';
+    u.onend = u.onerror = () => { if (speaking === m.id) speaking = null; };
+    speaking = m.id;
+    speechSynthesis.speak(u);
+  }
+
   // ---------- slash-command prompt templates ----------
   // Typing "/" at the start of the message offers ready-made prompts; picking one fills it in.
   const SLASH = [
@@ -809,11 +888,13 @@
   function updateSlash() {
     const m = input.value.match(/^\/(\w*)$/);
     const sp = $('#slashPop');
-    slashList = m ? SLASH.filter(([name]) => name.startsWith(m[1].toLowerCase())) : [];
-    if (!slashList.length) { sp.hidden = true; return; }
-    slashIdx = Math.min(slashIdx, slashList.length - 1);
-    sp.innerHTML = slashList.map(([name, text], i) =>
-      `<button type="button" class="${i === slashIdx ? 'sel' : ''}" data-si="${i}"><b>/${esc(name)}</b><small>${esc(text.slice(0, 70))}${text.length > 70 ? '…' : ''}</small></button>`).join('');
+    const all = [...myTemplates.map((t) => [t.name, t.text, true]), ...SLASH.filter(([n]) => !myTemplates.some((t) => t.name === n))];
+    slashList = m ? all.filter(([name]) => name.startsWith(m[1].toLowerCase())) : [];
+    if (!m) { sp.hidden = true; return; }
+    slashIdx = Math.min(slashIdx, Math.max(0, slashList.length - 1));
+    sp.innerHTML = slashList.map(([name, text, mine], i) =>
+      `<button type="button" class="${i === slashIdx ? 'sel' : ''}" data-si="${i}"><b>/${esc(name)}${mine ? ' <span class="tpl-mine">yours</span>' : ''}</b><small>${esc(text.slice(0, 70))}${text.length > 70 ? '…' : ''}</small></button>`).join('') +
+      '<button type="button" class="tpl-manage" data-tpl-manage>✎ Your templates…</button>';
     sp.hidden = false;
   }
   function insertSlash([, text]) {
@@ -832,13 +913,47 @@
       updateSlash();
       return true;
     }
-    if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') { e.preventDefault(); insertSlash(slashList[slashIdx]); return true; }
+    if (((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') && slashList.length) { e.preventDefault(); insertSlash(slashList[slashIdx]); return true; }
     if (e.key === 'Escape') { $('#slashPop').hidden = true; return true; }
     return false;
   }
   $('#slashPop').onclick = (e) => {
+    if (e.target.closest('[data-tpl-manage]')) { $('#slashPop').hidden = true; return openTemplates(); }
     const b = e.target.closest('[data-si]');
     if (b) insertSlash(slashList[+b.dataset.si]);
+  };
+
+  // Your own templates, kept in this browser.
+  let myTemplates = load('cc-templates', []);
+  function renderTemplates() {
+    $('#tplList').innerHTML = myTemplates.length
+      ? myTemplates.map((t, i) => `<li><b>/${esc(t.name)}</b><span>${esc(t.text)}</span><button type="button" data-tpl-rm="${i}" aria-label="Delete">✕</button></li>`).join('')
+      : '<li class="st-empty">No templates of your own yet.</li>';
+  }
+  function openTemplates() {
+    renderTemplates();
+    $('#tplName').value = '';
+    $('#tplText').value = '';
+    $('#tplDialog').showModal();
+  }
+  $('#tplAdd').onclick = () => {
+    const name = $('#tplName').value.trim().replace(/^\//, '').toLowerCase();
+    const text = $('#tplText').value.trim();
+    if (!/^[a-z0-9_-]{1,24}$/.test(name)) return toast('Command: letters, numbers, - or _ only');
+    if (!text) return toast('Write the prompt for this template');
+    myTemplates = [...myTemplates.filter((t) => t.name !== name), { name, text }];
+    store('cc-templates', myTemplates);
+    $('#tplName').value = '';
+    $('#tplText').value = '';
+    renderTemplates();
+    toast(`Saved /${name}`);
+  };
+  $('#tplList').onclick = (e) => {
+    const b = e.target.closest('[data-tpl-rm]');
+    if (!b) return;
+    myTemplates.splice(+b.dataset.tplRm, 1);
+    store('cc-templates', myTemplates);
+    renderTemplates();
   };
 
   // ---------- search in this chat ----------
@@ -972,6 +1087,18 @@
     if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') {
       e.preventDefault();
       if (switcher.open) switcher.close(); else openSwitcher();
+    } else if (mod && e.key === '/') {
+      e.preventDefault();
+      const d = $('#keysDialog');
+      if (d.open) d.close(); else d.showModal();
+    } else if (e.altKey && !mod && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && !document.querySelector('dialog[open]')) {
+      // Walk the chat list as it's shown (same filter and search).
+      const ids = [...$('#chatList').querySelectorAll('.chat-item')].map((li) => li.dataset.id);
+      if (!ids.length) return;
+      e.preventDefault();
+      const i = ids.indexOf(activeId);
+      const next = ids[i < 0 ? 0 : (i + (e.key === 'ArrowDown' ? 1 : -1) + ids.length) % ids.length];
+      openChat(next);
     } else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f' && activeId && !document.querySelector('dialog[open]')) {
       e.preventDefault();
       openFind();
@@ -1176,6 +1303,8 @@
     $('#btnPin').textContent = c.pinned ? '📌 Unpin chat' : '📌 Pin chat';
     $('#btnMute').textContent = c.muted ? '🔔 Unmute notifications' : '🔕 Mute notifications';
     $('#btnDelete').textContent = isGroup ? '🗑️ Delete group' : '🗑️ Delete agent';
+    $('#btnArchive').textContent = c.archived ? '🗄️ Unarchive chat' : '🗄️ Archive chat';
+    $('#btnDuplicate').textContent = isGroup ? '🧬 Duplicate group' : '🧬 Duplicate agent';
     $('#infoEmojis').innerHTML = meta.avatars.map((a) => `<button type="button" data-a="${a}">${a}</button>`).join('');
   }
 
@@ -1224,6 +1353,20 @@
     await updateChat(activeId, { allowRules: (c.allowRules || []).filter((r) => r !== b.dataset.rmrule) });
     renderDrawer();
   });
+  $('#btnArchive').onclick = async () => {
+    const c = chats.get(activeId);
+    await updateChat(activeId, { archived: !c.archived });
+    toast(c.archived ? 'Moved back to your chats' : 'Archived. Find it under the “Archived” filter.');
+    renderDrawer();
+  };
+  $('#btnDuplicate').onclick = async () => {
+    try {
+      const c = await api('POST', `/chats/${activeId}/duplicate`);
+      chats.set(c.id, c);
+      openChat(c.id);
+      toast('Made a copy with the same settings (fresh memory).');
+    } catch (e) { toast(e.message); }
+  };
   $('#btnPin').onclick = async () => { const c = chats.get(activeId); await updateChat(activeId, { pinned: !c.pinned }); renderDrawer(); };
   $('#btnMute').onclick = async () => { const c = chats.get(activeId); await updateChat(activeId, { muted: !c.muted }); renderDrawer(); };
   $('#btnExport').onclick = () => { window.location.href = `/api/chats/${activeId}/export`; };

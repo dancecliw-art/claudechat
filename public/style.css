@@ -554,6 +554,37 @@ dialog .settings { padding: 8px 20px; }
 .theme-opt .check { margin-left: auto; color: var(--accent); visibility: hidden; }
 .theme-opt.sel .check { visibility: visible; }
 
+/* ---- jump to latest ---- */
+.chat { position: relative; }
+.jump { position: absolute; right: 22px; bottom: 84px; z-index: 15; width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; background: var(--panel-2); color: var(--text-2); box-shadow: var(--shadow); }
+.jump svg { width: 24px; height: 24px; }
+.jump span { position: absolute; top: -6px; right: -4px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px; background: var(--unread); color: var(--accent-text); font-size: 11.5px; font-weight: 600; display: grid; place-items: center; }
+
+/* ---- text size (only the conversation scales) ---- */
+:root[data-size="small"] .messages, :root[data-size="small"] .composer-wrap { zoom: 0.9; }
+:root[data-size="large"] .messages, :root[data-size="large"] .composer-wrap { zoom: 1.15; }
+.size-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 2px 8px 6px; }
+.size-row button { padding: 5px 0; border-radius: 6px; background: var(--panel); color: var(--text-2); }
+.size-row button.sel { background: var(--accent); color: var(--accent-text); }
+.size-row .size-small { font-size: 12px; }
+.size-row .size-normal { font-size: 15px; }
+.size-row .size-large { font-size: 19px; font-weight: 600; }
+
+/* ---- your templates ---- */
+.tpl-mine { font-size: 10.5px; font-weight: 500; color: var(--accent); margin-left: 4px; }
+.slash-pop .tpl-manage { color: var(--accent); font-size: 12.5px; border-top: 1px solid var(--border); border-radius: 0 0 6px 6px; margin-top: 2px; }
+.tpl-list { list-style: none; margin: 0 16px 6px; padding: 0; max-height: 34vh; overflow-y: auto; }
+.tpl-list li { display: flex; align-items: flex-start; gap: 10px; padding: 8px 4px; border-bottom: 1px solid var(--border); font-size: 13.5px; }
+.tpl-list li span { flex: 1; min-width: 0; color: var(--text-2); overflow-wrap: anywhere; }
+.tpl-list li button { flex: none; width: 24px; height: 24px; border-radius: 50%; color: var(--text-2); }
+.tpl-list li button:hover { background: var(--hover); color: var(--danger); }
+
+/* ---- keyboard shortcuts ---- */
+.keys { display: grid; grid-template-columns: auto 1fr; gap: 9px 16px; margin: 4px 22px 8px; align-items: center; font-size: 14px; }
+.keys dt { white-space: nowrap; }
+.keys dd { margin: 0; color: var(--text-2); }
+kbd { display: inline-block; min-width: 22px; padding: 1px 6px; border-radius: 5px; border: 1px solid var(--border); border-bottom-width: 2px; background: var(--panel-2); font: 12px Consolas, Menlo, monospace; text-align: center; }
+
 /* ---- Discord theme: flat, left-aligned messages like a Discord channel ---- */
 :root[data-theme="discord"] body { font-family: "gg sans", "Noto Sans", "Helvetica Neue", "Segoe UI", system-ui, sans-serif; }
 [data-theme="discord"] .messages { padding: 12px 16px 10px; gap: 0; }
