@@ -1,0 +1,17 @@
+# Your chats, attachments and logs: never publish these
+data/
+**/data/
+
+# Build output (the exe is ~90 MB; rebuild with `node build/build-exe.js`)
+dist/
+build/out/
+
+# Local editor / Claude Code settings
+.claude/
+.vscode/
+
+node_modules/
+*.log
+.env
+.DS_Store
+Thumbs.db

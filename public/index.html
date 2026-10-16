@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClaudeChat</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='32' r='31' fill='%2300a884'/><path d='M22 17h20a9 9 0 0 1 0 25H27l-9 8 2-9a9 9 0 0 1 2-24z' fill='white'/><circle cx='24' cy='29.5' r='2.6' fill='%2300a884'/><circle cx='32' cy='29.5' r='2.6' fill='%2300a884'/><circle cx='40' cy='29.5' r='2.6' fill='%2300a884'/></svg>">
+<meta name="theme-color" content="#00a884">
+<link rel="stylesheet" href="/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+</head>
+<body>
+<div class="app" id="app">
+
+  <!-- ============ Sidebar ============ -->
+  <aside class="sidebar">
+    <header class="side-head">
+      <div class="brand">
+        <div class="brand-logo">✳</div>
+        <span>ClaudeChat</span>
+      </div>
+      <div class="head-actions">
+        <button class="icon-btn" id="btnBroadcast" title="Broadcast to several agents" aria-label="Broadcast">
+          <svg viewBox="0 0 24 24"><path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1zm13.5 1A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4zM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6z"/></svg>
+        </button>
+        <button class="icon-btn" id="btnGroup" title="New group" aria-label="New group">
+          <svg viewBox="0 0 24 24"><path d="M16 11a3 3 0 1 0-3-3 3 3 0 0 0 3 3zm-8 0a3 3 0 1 0-3-3 3 3 0 0 0 3 3zm0 2c-2.3 0-7 1.2-7 3.5V19h14v-2.5C15 14.2 10.3 13 8 13zm8 0c-.3 0-.6 0-1 .1a4.2 4.2 0 0 1 2 3.4V19h6v-2.5c0-2.3-4.7-3.5-7-3.5z"/></svg>
+        </button>
+        <button class="icon-btn" id="btnNew" title="New agent" aria-label="New agent">
+          <svg viewBox="0 0 24 24"><path d="M19 3H5a2 2 0 0 0-2 2v14l4-4h12a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm-3 7h-3v3h-2v-3H8V8h3V5h2v3h3v2z"/></svg>
+        </button>
+        <button class="icon-btn" id="btnTheme" title="Toggle theme" aria-label="Toggle theme">
+          <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9c0-.46-.04-.92-.1-1.36a5.4 5.4 0 0 1-4.4 2.26 5.4 5.4 0 0 1-3.14-9.8A9 9 0 0 0 12 3z"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="search-wrap">
+      <div class="search">
+        <svg viewBox="0 0 24 24"><path d="M15.5 14h-.8l-.3-.3A6.5 6.5 0 1 0 9.5 16a6.5 6.5 0 0 0 4.2-1.6l.3.3v.8l5 5 1.5-1.5-5-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
+        <input id="search" placeholder="Search agents" autocomplete="off">
+      </div>
+      <div class="chips" id="chips">
+        <button class="chip active" data-filter="all">All</button>
+        <button class="chip" data-filter="working">Working</button>
+        <button class="chip" data-filter="unread">Unread</button>
+        <button class="chip" data-filter="groups">Groups</button>
+        <button class="chip" data-filter="pinned">Pinned</button>
+      </div>
+    </div>
+
+    <ul class="chat-list" id="chatList"></ul>
+
+    <!-- usage meter (opens the Usage card) -->
+    <div class="usage-anchor">
+      <button class="usage-mini" id="usageMini" aria-haspopup="true">
+        <span class="um-row"><span>Session</span><span class="um-bar"><i id="umSession"></i></span><span id="umSessionPct">–</span></span>
+        <span class="um-row"><span>Weekly</span><span class="um-bar"><i id="umWeekly"></i></span><span id="umWeeklyPct">–</span></span>
+      </button>
+      <div class="usage-card" id="usageCard" hidden>
+        <div class="uc-head">
+          <span>Usage</span>
+          <div class="uc-icons">
+            <button class="icon-btn sm" id="ucSpendBtn" title="Spending by agent" aria-label="Spending by agent">
+              <svg viewBox="0 0 24 24"><path d="M5 9h3v10H5zm5.5-5h3v15h-3zM16 13h3v6h-3z"/></svg>
+            </button>
+            <button class="icon-btn sm" id="ucRefresh" title="Refresh (sends a tiny Haiku request)" aria-label="Refresh usage">
+              <svg viewBox="0 0 24 24"><path d="M17.6 6.4A8 8 0 1 0 19.7 14h-2.1a6 6 0 1 1-1.4-6.2L13 11h7V4z"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="uc-block">
+          <div class="uc-line"><b>Session limit</b><span id="ucSessionPct">–</span></div>
+          <div class="uc-bar"><i id="ucSessionBar"></i></div>
+          <div class="uc-sub" id="ucSessionReset">No data yet</div>
+        </div>
+        <div class="uc-block">
+          <div class="uc-line"><b>Weekly</b><span id="ucWeeklyPct">–</span></div>
+          <div class="uc-bar"><i id="ucWeeklyBar"></i></div>
+          <div class="uc-sub" id="ucWeeklyReset">No data yet</div>
+        </div>
+        <div class="uc-spend" id="ucSpend" hidden></div>
+        <div class="uc-foot" id="ucFoot"></div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ============ Conversation ============ -->
+  <main class="convo" id="convo">
+    <div class="empty" id="empty">
+      <div class="empty-art">✳</div>
+      <h1>ClaudeChat</h1>
+      <p>Message all your Claude Code agents in one place. Each chat is its own agent with its own folder, model and memory. Put several in a group and they talk to each other.</p>
+      <div class="empty-actions">
+        <button class="primary" id="btnNewEmpty">New agent</button>
+        <button class="ghost" id="btnGroupEmpty">New group</button>
+      </div>
+      <small>🔒 Runs locally through your Claude Code login</small>
+    </div>
+
+    <section class="chat" id="chat" hidden>
+      <header class="chat-head">
+        <button class="icon-btn back" id="btnBack" aria-label="Back">
+          <svg viewBox="0 0 24 24"><path d="M20 11H7.8l5.6-5.6L12 4l-8 8 8 8 1.4-1.4L7.8 13H20z"/></svg>
+        </button>
+        <div class="avatar sm" id="headAvatar"></div>
+        <button class="head-info" id="headInfo">
+          <div class="head-name" id="headName"></div>
+          <div class="head-sub" id="headSub"></div>
+        </button>
+
+        <!-- model + effort pill (Opus 5.5  High  ◔) -->
+        <div class="model-wrap" id="modelWrap">
+          <button class="model-pill" id="modelPill" aria-haspopup="true">
+            <span class="mp-model" id="mpModel">Opus 5.5</span>
+            <span class="mp-effort" id="mpEffort">High</span>
+            <svg class="ring" id="mpRing" viewBox="0 0 20 20"><circle class="ring-bg" cx="10" cy="10" r="7"/><circle class="ring-fg" cx="10" cy="10" r="7"/></svg>
+          </button>
+          <div class="popover" id="modelPop" hidden>
+            <div class="pop-label">Model</div>
+            <div id="popModels"></div>
+            <div class="pop-label">Effort</div>
+            <div class="effort-bar" id="popEfforts"></div>
+            <div class="pop-hint">Higher effort means deeper thinking, slower replies and more usage. Applies from the next message.</div>
+          </div>
+        </div>
+
+        <button class="icon-btn" id="btnStopHead" title="Stop" aria-label="Stop" hidden>
+          <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+        </button>
+        <button class="icon-btn" id="btnInfo" title="Info" aria-label="Info">
+          <svg viewBox="0 0 24 24"><path d="M12 7a2 2 0 1 0-2-2 2 2 0 0 0 2 2zm0 2a2 2 0 1 0 2 2 2 2 0 0 0-2-2zm0 6a2 2 0 1 0 2 2 2 2 0 0 0-2-2z"/></svg>
+        </button>
+      </header>
+
+      <div class="messages" id="messages"></div>
+      <div class="drop-hint" id="dropHint" hidden>Drop files to attach</div>
+
+      <footer class="composer-wrap">
+        <div class="reply-bar" id="replyBar" hidden>
+          <div class="rb-body"><b id="rbName"></b><span id="rbText"></span></div>
+          <button class="icon-btn sm" id="rbClose" aria-label="Cancel reply">✕</button>
+        </div>
+        <div class="attach-strip" id="attachStrip" hidden></div>
+        <div class="mention-pop" id="mentionPop" hidden></div>
+        <div class="composer">
+          <button class="icon-btn" id="btnAttach" title="Attach files" aria-label="Attach files">
+            <svg viewBox="0 0 24 24"><path d="M16.5 6.5v10.6a4.5 4.5 0 0 1-9 0V5.6a3 3 0 0 1 6 0v10.3a1.5 1.5 0 0 1-3 0V6.5H9v9.4a3 3 0 0 0 6 0V5.6a4.5 4.5 0 0 0-9 0v11.5a6 6 0 0 0 12 0V6.5z"/></svg>
+          </button>
+          <input type="file" id="fileInput" multiple hidden>
+          <div class="input-box">
+            <textarea id="input" rows="1" placeholder="Type a message"></textarea>
+          </div>
+          <button class="send" id="btnSend" aria-label="Send">
+            <svg viewBox="0 0 24 24"><path d="M2 21l21-9L2 3v7l15 2-15 2z"/></svg>
+          </button>
+          <button class="send mic" id="btnMic" aria-label="Voice input" title="Dictate">
+            <svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v7a3 3 0 0 0 3 3zm5.3-3a5.3 5.3 0 0 1-10.6 0H5a7 7 0 0 0 6 6.9V22h2v-3.1a7 7 0 0 0 6-6.9z"/></svg>
+          </button>
+        </div>
+      </footer>
+    </section>
+  </main>
+
+  <!-- ============ Info drawer ============ -->
+  <aside class="drawer" id="drawer" hidden>
+    <header class="drawer-head">
+      <button class="icon-btn" id="btnCloseDrawer" aria-label="Close">
+        <svg viewBox="0 0 24 24"><path d="M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6z"/></svg>
+      </button>
+      <span id="drawerTitle">Agent info</span>
+    </header>
+    <div class="drawer-body">
+      <div class="drawer-hero">
+        <button class="avatar big" id="infoAvatar" title="Change avatar"></button>
+        <div class="emoji-grid" id="infoEmojis" hidden></div>
+        <input class="name-input" id="infoName" maxlength="60">
+        <div class="muted" id="infoMeta"></div>
+      </div>
+      <form class="settings" id="infoForm"></form>
+      <div class="danger-zone">
+        <button class="row-btn" id="btnPin">📌 Pin chat</button>
+        <button class="row-btn" id="btnMute">🔕 Mute notifications</button>
+        <button class="row-btn" id="btnExport">📤 Export chat</button>
+        <button class="row-btn" id="btnReset">🔄 New session (clear memory)</button>
+        <button class="row-btn danger" id="btnDelete">🗑️ Delete</button>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<!-- ============ New agent dialog ============ -->
+<dialog id="newDialog">
+  <form method="dialog" id="newForm">
+    <h2>New agent</h2>
+    <div class="avatar-row" id="newAvatars"></div>
+    <div class="settings" id="newSettings"></div>
+    <div class="dialog-actions">
+      <button value="cancel" class="ghost" formnovalidate>Cancel</button>
+      <button value="ok" class="primary">Create</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ============ New group dialog ============ -->
+<dialog id="groupDialog">
+  <form method="dialog" id="groupForm">
+    <h2>👥 New group</h2>
+    <p class="muted">Agents in a group see each other's messages and answer in turn. @mention a name to ask only that agent.</p>
+    <div class="settings">
+      <label class="field"><span>Group name</span><input name="name" required maxlength="60" placeholder="e.g. Launch team"></label>
+      <div class="field"><span>Members</span><div class="bc-list" id="groupMembers"></div></div>
+      <label class="field"><span>Topic / instructions</span><textarea name="systemPrompt" rows="2" placeholder="e.g. Plan the v2 launch together. Frontend owns UI, Backend owns API."></textarea></label>
+    </div>
+    <div class="dialog-actions">
+      <button value="cancel" class="ghost" formnovalidate>Cancel</button>
+      <button value="ok" class="primary">Create group</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ============ Broadcast dialog ============ -->
+<dialog id="bcDialog">
+  <form method="dialog" id="bcForm">
+    <h2>📣 Broadcast</h2>
+    <p class="muted">Send the same message to several chats at once. Busy agents queue it and answer when they're free.</p>
+    <div class="bc-list" id="bcList"></div>
+    <textarea id="bcText" rows="3" placeholder="Message for everyone…" required></textarea>
+    <div class="dialog-actions">
+      <button value="cancel" class="ghost" formnovalidate>Cancel</button>
+      <button value="ok" class="primary">Send to selected</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ============ Folder picker ============ -->
+<dialog id="folderDialog" class="wide">
+  <form method="dialog" id="folderForm">
+    <h2>Choose a folder</h2>
+    <div class="fp-places" id="fpPlaces"></div>
+    <div class="fp-path">
+      <button type="button" class="icon-btn sm" id="fpUp" title="Up one level" aria-label="Up one level">
+        <svg viewBox="0 0 24 24"><path d="M4 12l1.4 1.4L11 7.8V20h2V7.8l5.6 5.6L20 12l-8-8z"/></svg>
+      </button>
+      <input id="fpInput" spellcheck="false" autocomplete="off">
+    </div>
+    <ul class="fp-list" id="fpList"></ul>
+    <div class="fp-tools">
+      <label class="fp-hidden"><input type="checkbox" id="fpHidden"> Show hidden</label>
+      <button type="button" class="ghost" id="fpMkdir">＋ New folder</button>
+    </div>
+    <div class="dialog-actions">
+      <button value="cancel" class="ghost" formnovalidate>Cancel</button>
+      <button value="ok" class="primary" id="fpChoose">Use this folder</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="/app.js"></script>
+</body>
+</html>
