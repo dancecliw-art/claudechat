@@ -63,14 +63,16 @@ step('Generating the single-executable blob');
 const blobPath = path.join(WORK, 'sea-prep.blob');
 const configPath = path.join(WORK, 'sea-config.json');
 fs.writeFileSync(configPath, JSON.stringify({
-  main: bundlePath,
-  output: blobPath,
+  // Relative on purpose: Node stores this path inside the exe, and an absolute one would
+  // leak the builder's Windows username (C:\Users\<name>\...).
+  main: path.basename(bundlePath),
+  output: path.basename(blobPath),
   disableExperimentalSEAWarning: true,
   useSnapshot: false,
   useCodeCache: false,
   assets,
 }, null, 2));
-execFileSync(process.execPath, ['--experimental-sea-config', configPath], { stdio: 'inherit' });
+execFileSync(process.execPath, ['--experimental-sea-config', path.basename(configPath)], { stdio: 'inherit', cwd: WORK });
 
 step(`Copying the Node runtime (${process.version})`);
 const exeTmp = path.join(WORK, 'ClaudeChat.exe');
