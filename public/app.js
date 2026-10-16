@@ -3,8 +3,8 @@
   const $ = (sel) => document.querySelector(sel);
   const app = $('#app');
 
-  const EFFORT_LABEL = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh', max: 'Max' };
-  const EFFORT_FRACTION = { low: 0.2, medium: 0.4, high: 0.6, xhigh: 0.8, max: 1 };
+  const EFFORT_LABEL = { none: 'None', minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh', max: 'Max', ultra: 'Ultra' };
+  const EFFORT_FRACTION = { none: 0.05, minimal: 0.1, low: 0.2, medium: 0.4, high: 0.6, xhigh: 0.8, max: 0.9, ultra: 1 };
   const MODEL_NOTES = {
     'claude-fable-5-1': 'Most capable · slowest, uses the most',
     'claude-opus-5-5': 'Default · great for coding',
@@ -14,8 +14,16 @@
     'claude-sonnet-4-6': 'Anthropic, via Antigravity',
     'claude-opus-4-6-thinking': 'Anthropic, via Antigravity',
     'gpt-oss-120b': 'Open model, via Antigravity',
+    'gpt-6.1-sol': 'OpenAI · Codex default',
+    'gpt-5.5': 'OpenAI · lighter on usage',
   };
-  const PROVIDER_SHORT = { claude: 'Claude Code', antigravity: 'Antigravity' };
+  const PROVIDER_SHORT = { claude: 'Claude Code', antigravity: 'Antigravity', codex: 'Codex' };
+  // What runs each provider's agents, for the settings hints.
+  const PROVIDER_CLI = {
+    claude: ['claude', 'Runs Claude Code (<code>claude</code>) with your Claude plan.'],
+    antigravity: ['agy', 'Runs Google Antigravity’s agent (<code>agy</code>) with your Google account.'],
+    codex: ['codex', 'Runs OpenAI Codex (<code>codex</code>) with your ChatGPT plan or API key (<code>codex login</code>).'],
+  };
   const PERMISSION_INFO = {
     smart: 'Ask when risky: safe actions run, risky ones wait for your OK (recommended)',
     ask: 'Ask every time: approve each edit and command',
@@ -136,6 +144,18 @@
   const modelsFor = (prov) => meta?.providers?.[prov]?.models || [];
   const modelInfo = (prov, id) => modelsFor(prov).find((m) => m.id === id);
   const effortsFor = (c) => modelInfo(providerOf(c), c.model)?.efforts || [];
+  // The effort an agent actually runs with: its own if the model has it, else the model's default.
+  function effortOf(c) {
+    const efforts = effortsFor(c);
+    if (efforts.includes(c.effort)) return c.effort;
+    const def = modelInfo(providerOf(c), c.model)?.defaultEffort;
+    if (efforts.includes(def)) return def;
+    return efforts.includes('medium') ? 'medium' : efforts[0];
+  }
+  function permissionInfo(p, prov) {
+    if (prov === 'codex' && p === 'auto') return 'Codex decides: works in its sandbox, never asks';
+    return PERMISSION_INFO[p] || p;
+  }
   function modelName(id) {
     for (const p of Object.values(meta?.providers || {})) {
       const m = p.models.find((x) => x.id === id);
@@ -223,7 +243,16 @@
   };
 
   // ---------- conversation ----------
-  async function openChat(id) {
+  function gotoMessage(id, smooth = true) {
+    const node = $('#messages').querySelector(`[data-id="${CSS.escape(id)}"]`);
+    if (!node) return false;
+    node.scrollIntoView({ block: 'center', behavior: smooth ? 'smooth' : 'auto' });
+    node.classList.add('flash');
+    setTimeout(() => node.classList.remove('flash'), 1300);
+    return true;
+  }
+
+  async function openChat(id, gotoId) {
     if (activeId !== id) { clearReply(); clearAtts(); }
     activeId = id;
     unread[id] = 0;
@@ -243,14 +272,17 @@
       renderHeader();
       renderMessages();
       if (!$('#drawer').hidden) renderDrawer();
+      if (!$('#findBar').hidden) runFind();
+      if (gotoId && !gotoMessage(gotoId, false)) toast('That message is no longer in this chat.');
     } catch (e) {
       toast(e.message);
     }
-    if (matchMedia('(min-width: 901px)').matches) $('#input').focus();
+    if (matchMedia('(min-width: 901px)').matches && $('#findBar').hidden) $('#input').focus();
   }
 
   function closeChat() {
     activeId = null;
+    closeFind();
     app.classList.remove('in-chat');
     $('#chat').hidden = true;
     $('#empty').hidden = false;
@@ -281,8 +313,7 @@
     }
     $('#modelWrap').hidden = isGroup;
     if (!isGroup) {
-      const efforts = effortsFor(c);
-      const effort = efforts.includes(c.effort) ? c.effort : (efforts.includes('medium') ? 'medium' : efforts[0]);
+      const effort = effortOf(c);
       $('#mpModel').textContent = modelName(c.model);
       $('#mpEffort').textContent = effort ? EFFORT_LABEL[effort] || effort : '';
       $('#mpRing').hidden = !effort;
@@ -310,7 +341,7 @@
     if (m.role === 'approval') return dayBreak + approvalHtml(m);
     const out = m.role === 'user';
     const first = dayBreak || !prev || !isBubble(prev) || !sameSender(prev, m);
-    const stamp = `<span class="stamp">${clock(m.ts)}${out ? tickHtml(m) : ''}</span>`;
+    const stamp = `<span class="stamp">${m.starred ? '<span class="star-mark" title="Starred">★</span>' : ''}${clock(m.ts)}${out ? tickHtml(m) : ''}</span>`;
     const sender = !out && m.from && first ? `<span class="sender" style="color:${esc(m.from.color)}">${esc(m.from.avatar)} ${esc(m.from.name)}</span>` : '';
     const quote = m.replyTo ? `<span class="quote" data-goto="${esc(m.replyTo.id)}"><b>${esc(m.replyTo.name)}</b><span>${esc(m.replyTo.text)}</span></span>` : '';
     const body = out ? plain(m.text) : md(m.text);
@@ -319,6 +350,7 @@
         <div class="msg-actions">
           <button type="button" data-act="reply" title="Reply">↩</button>
           <button type="button" data-act="copy" title="Copy">⧉</button>
+          <button type="button" data-act="star" title="${m.starred ? 'Unstar' : 'Star'}">${m.starred ? '★' : '☆'}</button>
         </div>
         <div class="bubble">
           ${sender}
@@ -479,6 +511,7 @@
       const m = activeMessages.find((x) => x.id === id);
       if (!m) return;
       if (act.dataset.act === 'copy') copyText(m.text);
+      if (act.dataset.act === 'star') api('PATCH', `/chats/${activeId}/messages/${m.id}`, { starred: !m.starred }).catch((err) => toast(err.message));
       if (act.dataset.act === 'reply') {
         const c = chats.get(activeId);
         setReply({ id: m.id, name: m.role === 'user' ? 'You' : m.from?.name || c.name, text: (m.text || '').slice(0, 300), color: m.from?.color });
@@ -488,11 +521,7 @@
     const cc = e.target.closest('.copy-code');
     if (cc) return copyText(cc.parentElement.querySelector('code')?.innerText ?? cc.parentElement.innerText.replace(/^Copy/, ''));
     const q = e.target.closest('[data-goto]');
-    if (q) {
-      const node = $('#messages').querySelector(`[data-id="${q.dataset.goto}"]`);
-      if (node) { node.scrollIntoView({ block: 'center', behavior: 'smooth' }); node.classList.add('flash'); setTimeout(() => node.classList.remove('flash'), 1300); }
-      return;
-    }
+    if (q) return gotoMessage(q.dataset.goto);
     const img = e.target.closest('img[data-full]');
     if (img) {
       const lb = document.createElement('div');
@@ -511,8 +540,9 @@
     $('#btnSend').hidden = !hasContent && !!Speech;
     $('#btnMic').hidden = !!hasContent || !Speech;
   }
-  input.addEventListener('input', () => { autosize(); syncSendButton(); updateMentions(); });
+  input.addEventListener('input', () => { autosize(); syncSendButton(); updateMentions(); updateSlash(); });
   input.addEventListener('keydown', (e) => {
+    if (handleSlashKeys(e)) return;
     if (handleMentionKeys(e)) return;
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
   });
@@ -690,6 +720,212 @@
     if (b) insertMention(mentionList[+b.dataset.i]);
   };
 
+  // ---------- slash-command prompt templates ----------
+  // Typing "/" at the start of the message offers ready-made prompts; picking one fills it in.
+  const SLASH = [
+    ['review', 'Review the current uncommitted changes (git diff). List bugs, risky code and missing tests, most important first. Don\'t change any files.'],
+    ['test', 'Write or update tests for the code we just changed, run them, and fix anything that fails. Tell me what you covered.'],
+    ['explain', 'Explain how this project is organized: the main parts, how they connect, and where I should start reading.'],
+    ['fix', 'Run the build and the tests, then fix whatever fails. Tell me what was wrong and what you changed.'],
+    ['commit', 'Write a clear commit message for the current changes and commit them. Don\'t push.'],
+    ['plan', 'Before changing anything, write a short step-by-step plan for: '],
+  ];
+  let slashIdx = 0;
+  let slashList = [];
+  function updateSlash() {
+    const m = input.value.match(/^\/(\w*)$/);
+    const sp = $('#slashPop');
+    slashList = m ? SLASH.filter(([name]) => name.startsWith(m[1].toLowerCase())) : [];
+    if (!slashList.length) { sp.hidden = true; return; }
+    slashIdx = Math.min(slashIdx, slashList.length - 1);
+    sp.innerHTML = slashList.map(([name, text], i) =>
+      `<button type="button" class="${i === slashIdx ? 'sel' : ''}" data-si="${i}"><b>/${esc(name)}</b><small>${esc(text.slice(0, 70))}${text.length > 70 ? '…' : ''}</small></button>`).join('');
+    sp.hidden = false;
+  }
+  function insertSlash([, text]) {
+    input.value = text;
+    input.selectionStart = input.selectionEnd = text.length;
+    $('#slashPop').hidden = true;
+    autosize();
+    syncSendButton();
+    input.focus();
+  }
+  function handleSlashKeys(e) {
+    if ($('#slashPop').hidden) return false;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      slashIdx = (slashIdx + (e.key === 'ArrowDown' ? 1 : -1) + slashList.length) % slashList.length;
+      updateSlash();
+      return true;
+    }
+    if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') { e.preventDefault(); insertSlash(slashList[slashIdx]); return true; }
+    if (e.key === 'Escape') { $('#slashPop').hidden = true; return true; }
+    return false;
+  }
+  $('#slashPop').onclick = (e) => {
+    const b = e.target.closest('[data-si]');
+    if (b) insertSlash(slashList[+b.dataset.si]);
+  };
+
+  // ---------- search in this chat ----------
+  let findHits = [];
+  let findPos = -1;
+  function openFind() {
+    if (!activeId) return;
+    $('#findBar').hidden = false;
+    $('#findInput').focus();
+    $('#findInput').select();
+    runFind();
+  }
+  function clearMarks() {
+    for (const mk of $('#messages').querySelectorAll('mark.find')) mk.replaceWith(...mk.childNodes);
+    $('#messages').querySelectorAll('.find-current').forEach((n) => n.classList.remove('find-current'));
+    $('#messages').normalize();
+  }
+  function closeFind() {
+    $('#findBar').hidden = true;
+    clearMarks();
+    findHits = [];
+  }
+  // Marks every match in the rendered messages (text only, not code-copy buttons or tool cards).
+  function runFind() {
+    clearMarks();
+    const q = $('#findInput').value.trim().toLowerCase();
+    findHits = [];
+    if (q) {
+      for (const node of $('#messages').querySelectorAll('.msg .text, .sys')) {
+        const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+        const texts = [];
+        while (walker.nextNode()) if (!walker.currentNode.parentElement.closest('.copy-code')) texts.push(walker.currentNode);
+        for (const t of texts) {
+          const lower = t.nodeValue.toLowerCase();
+          let at = lower.indexOf(q);
+          if (at < 0) continue;
+          const frag = document.createDocumentFragment();
+          let last = 0;
+          while (at >= 0) {
+            frag.append(t.nodeValue.slice(last, at));
+            const mk = document.createElement('mark');
+            mk.className = 'find';
+            mk.textContent = t.nodeValue.slice(at, at + q.length);
+            frag.append(mk);
+            findHits.push(mk);
+            last = at + q.length;
+            at = lower.indexOf(q, last);
+          }
+          frag.append(t.nodeValue.slice(last));
+          t.replaceWith(frag);
+        }
+      }
+    }
+    findPos = findHits.length ? findHits.length - 1 : -1; // newest match first, like scrolling up
+    showFind();
+  }
+  function showFind() {
+    $('#findCount').textContent = $('#findInput').value.trim() ? (findHits.length ? `${findPos + 1} of ${findHits.length}` : 'No results') : '';
+    $('#messages').querySelectorAll('.find-current').forEach((n) => n.classList.remove('find-current'));
+    const mk = findHits[findPos];
+    if (mk) { mk.classList.add('find-current'); mk.scrollIntoView({ block: 'center' }); }
+  }
+  function stepFind(dir) {
+    if (!findHits.length) return;
+    findPos = (findPos + dir + findHits.length) % findHits.length;
+    showFind();
+  }
+  let findTimer;
+  $('#findInput').addEventListener('input', () => { clearTimeout(findTimer); findTimer = setTimeout(runFind, 120); });
+  $('#findInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); stepFind(e.shiftKey ? 1 : -1); }
+    if (e.key === 'Escape') { e.preventDefault(); closeFind(); input.focus(); }
+  });
+  $('#findPrev').onclick = () => stepFind(-1);
+  $('#findNext').onclick = () => stepFind(1);
+  $('#findClose').onclick = closeFind;
+  $('#btnFind').onclick = () => ($('#findBar').hidden ? openFind() : closeFind());
+
+  // ---------- quick switcher (Ctrl+K) ----------
+  const switcher = $('#switcher');
+  let swList = [];
+  let swIdx = 0;
+  function renderSwitcher() {
+    const q = $('#swInput').value.trim().toLowerCase();
+    const all = sortedChats().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    // Names that start with the query first, then ones that contain it anywhere.
+    swList = q
+      ? [...all.filter((c) => c.name.toLowerCase().startsWith(q)), ...all.filter((c) => !c.name.toLowerCase().startsWith(q) && (c.name + ' ' + (c.cwd || '')).toLowerCase().includes(q))]
+      : all.filter((c) => c.id !== activeId);
+    swIdx = Math.min(swIdx, Math.max(0, swList.length - 1));
+    $('#swList').innerHTML = swList.length ? swList.slice(0, 30).map((c, i) => `
+      <li class="${i === swIdx ? 'sel' : ''}" data-sw="${c.id}">
+        <div class="avatar sm" style="--av:${c.color}">${esc(c.avatar)}</div>
+        <span class="sw-name">${esc(c.name)}</span>
+        <span class="sw-sub">${c.running ? 'working…' : unread[c.id] ? `${unread[c.id]} unread` : esc(c.type === 'group' ? 'group' : PROVIDER_SHORT[providerOf(c)] || '')}</span>
+      </li>`).join('') : '<li class="sw-empty">No chats match</li>';
+    $('#swList').querySelector('.sel')?.scrollIntoView({ block: 'nearest' });
+  }
+  function openSwitcher() {
+    if (!chats.size) return;
+    $('#swInput').value = '';
+    swIdx = 0;
+    renderSwitcher();
+    if (!switcher.open) switcher.showModal();
+    $('#swInput').focus();
+  }
+  function pickSwitcher(id) {
+    switcher.close();
+    if (id) openChat(id);
+  }
+  $('#swInput').addEventListener('input', () => { swIdx = 0; renderSwitcher(); });
+  $('#swInput').addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const n = Math.min(swList.length, 30);
+      if (n) swIdx = (swIdx + (e.key === 'ArrowDown' ? 1 : -1) + n) % n;
+      renderSwitcher();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      pickSwitcher(swList[swIdx]?.id);
+    }
+  });
+  $('#swList').onclick = (e) => {
+    const li = e.target.closest('[data-sw]');
+    if (li) pickSwitcher(li.dataset.sw);
+  };
+  switcher.addEventListener('click', (e) => { if (e.target === switcher) switcher.close(); });
+
+  document.addEventListener('keydown', (e) => {
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      if (switcher.open) switcher.close(); else openSwitcher();
+    } else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f' && activeId && !document.querySelector('dialog[open]')) {
+      e.preventDefault();
+      openFind();
+    }
+  });
+
+  // ---------- starred messages ----------
+  const starredDialog = $('#starredDialog');
+  $('#btnStarred').onclick = async () => {
+    let list;
+    try { list = await api('GET', '/starred'); } catch (e) { return toast(e.message); }
+    $('#starredList').innerHTML = list.length ? list.map((s) => `
+      <li data-chat="${s.chatId}" data-msg="${s.message.id}">
+        <div class="avatar sm" style="--av:${s.color}">${esc(s.avatar)}</div>
+        <div class="st-body">
+          <div class="st-head"><b>${esc(s.chatName)}</b><span>${esc(s.message.role === 'user' ? 'You' : s.message.from?.name || s.chatName)} · ${esc(listTime(s.message.ts))}</span></div>
+          <div class="st-text">${esc(String(s.message.text || '').replace(/[#*_`>]/g, '').slice(0, 220))}</div>
+        </div>
+      </li>`).join('') : '<li class="st-empty">No starred messages yet. Hover a message and press ☆ to keep it here.</li>';
+    starredDialog.showModal();
+  };
+  $('#starredList').onclick = (e) => {
+    const li = e.target.closest('[data-chat]');
+    if (!li) return;
+    starredDialog.close();
+    openChat(li.dataset.chat, li.dataset.msg);
+  };
+
   // ---------- model / effort popover ----------
   const pop = $('#modelPop');
   $('#modelPill').onclick = (e) => {
@@ -704,7 +940,8 @@
   });
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    if (!pop.hidden) pop.hidden = true;
+    if (!$('#findBar').hidden && $('#findBar').contains(document.activeElement)) closeFind();
+    else if (!pop.hidden) pop.hidden = true;
     else if (!$('#usageCard').hidden) $('#usageCard').hidden = true;
     else if (!$('#drawer').hidden) $('#drawer').hidden = true;
     else if (replyTo) clearReply();
@@ -721,11 +958,11 @@
         <span class="check">✓</span>
       </button>`).join('');
     const efforts = effortsFor(c);
-    const current = efforts.includes(c.effort) ? c.effort : (efforts.includes('medium') ? 'medium' : efforts[0]);
+    const current = effortOf(c);
     const selIdx = efforts.indexOf(current);
     $('#popEfforts').style.gridTemplateColumns = `repeat(${Math.max(efforts.length, 1)}, 1fr)`;
     $('#popEfforts').innerHTML = efforts.length
-      ? efforts.map((e, i) => `<button class="effort-btn ${i < selIdx ? 'on' : ''} ${e === current ? 'sel' : ''}" data-effort="${e}">${EFFORT_LABEL[e]}</button>`).join('')
+      ? efforts.map((e, i) => `<button class="effort-btn ${i < selIdx ? 'on' : ''} ${e === current ? 'sel' : ''}" data-effort="${esc(e)}">${esc(EFFORT_LABEL[e] || e)}</button>`).join('')
       : '<span class="pop-hint" style="padding:0">This model has a fixed thinking level.</span>';
   }
   pop.onclick = async (e) => {
@@ -753,30 +990,40 @@
     const drives = (meta.drives || []).join(' ');
     const prov = providerOf(c);
     const isAgy = prov === 'antigravity';
+    const isCodex = prov === 'codex';
+    const [cli, about] = PROVIDER_CLI[prov] || PROVIDER_CLI.claude;
     const efforts = effortsFor(c);
     const providerOpts = Object.entries(meta.providers || { claude: { name: 'Claude Code', available: true } }).map(([id, p]) =>
       `<option value="${id}" ${id === prov ? 'selected' : ''} ${p.available ? '' : 'disabled'}>${esc(p.name)}${p.available ? '' : ' (not installed)'}</option>`).join('');
     return `
       <label class="field"><span>Provider</span>
         <select name="provider">${providerOpts}</select>
-        <small>${isAgy ? 'Runs Google Antigravity’s agent (<code>agy</code>) with your Google account.' : 'Runs Claude Code (<code>claude</code>) with your Claude plan.'}</small></label>
+        <small>${about}</small></label>
       <label class="field"><span>Model</span>
         <select name="model">${opt(modelsFor(prov).map((m) => m.id), c.model, modelName)}</select></label>
       <label class="field"><span>Effort</span>
         ${efforts.length
-          ? `<select name="effort">${opt(efforts, efforts.includes(c.effort) ? c.effort : (efforts.includes('medium') ? 'medium' : efforts[0]), (e) => EFFORT_LABEL[e])}</select>`
+          ? `<select name="effort">${opt(efforts, effortOf(c), (e) => EFFORT_LABEL[e] || e)}</select>`
           : '<select disabled><option>Fixed for this model</option></select>'}</label>
       <div class="field"><span>Working folder</span>
         <div class="inline"><input name="cwd" value="${esc(c.cwd)}" placeholder="${esc(meta.home)}" spellcheck="false"><button type="button" data-browse="cwd">Browse…</button></div>
-        <small>Where the agent starts, like running <code>${isAgy ? 'agy' : 'claude'}</code> in this folder.</small></div>
+        <small>Where the agent starts, like running <code>${cli}</code> in this folder.</small></div>
       <label class="switch"><input type="checkbox" name="fullAccess" ${c.fullAccess !== false ? 'checked' : ''}>
-        <span><b>Full PC access</b><small class="muted" style="text-align:left;display:block">Lets the agent read and edit files on every drive (${esc(drives)}), not just its folder.</small></span></label>
+        <span><b>Full PC access</b><small class="muted" style="text-align:left;display:block">${isCodex
+          ? 'Codex can always read your whole PC. Its edits and commands outside the working folder ask you first in “Ask when risky”.'
+          : `Lets the agent read and edit files on every drive (${esc(drives)}), not just its folder.`}</small></span></label>
       <label class="field"><span>Permissions</span>
-        <select name="permissionMode">${opt(meta.permissionModes, c.permissionMode, (p) => PERMISSION_INFO[p] || p)}</select>
+        <select name="permissionMode">${opt(meta.permissionModes, c.permissionMode, (p) => permissionInfo(p, prov))}</select>
         <small class="${c.permissionMode === 'bypassPermissions' ? 'warn' : ''}">${c.permissionMode === 'bypassPermissions'
           ? 'Bypass lets the agent run any command without checks.' + (c.fullAccess !== false ? ' Combined with full PC access it can change anything on this computer.' : '')
           : (c.permissionMode === 'smart' || c.permissionMode === 'ask') && isAgy
             ? 'Antigravity can’t ask mid-task, so ClaudeChat checks every command it wants to run: safe ones run, risky ones wait for your Allow/Deny. File edits inside its folders happen directly.'
+          : (c.permissionMode === 'smart' || c.permissionMode === 'ask') && isCodex
+            ? 'Codex works in its sandbox and asks before commands and edits. ClaudeChat answers: safe ones run, risky ones wait for your Allow/Deny.'
+          : isCodex && c.permissionMode === 'plan'
+            ? 'Codex runs with a read-only sandbox: it can look around but not change anything.'
+          : isCodex && c.permissionMode !== 'bypassPermissions'
+            ? 'Codex never asks in this mode. Its sandbox keeps writes inside the working folder.'
           : c.permissionMode === 'smart' || c.permissionMode === 'ask'
             ? 'Risky means deleting files, editing outside the working folder, system or registry changes, git push, admin rights, secrets and the like. The agent pauses and you get Allow/Deny in the chat.'
             : 'This mode never asks you. Pick “Ask when risky” to approve dangerous actions yourself.'}</small></label>
@@ -788,8 +1035,8 @@
         <textarea name="systemPrompt" rows="3" placeholder="e.g. You are my backend reviewer. Be terse.">${esc(c.systemPrompt || '')}</textarea>
         <small>Added to the agent’s system prompt.</small></label>
       <label class="field"><span>Resume session ID</span>
-        <input name="sessionId" value="${esc(c.sessionId || '')}" placeholder="optional: continue an existing Claude Code conversation" spellcheck="false" pattern="[0-9a-fA-F-]{36}">
-        <small>Paste a session ID (shown by <code>claude --resume</code>) to reconnect this agent to that conversation's memory.</small></label>`;
+        <input name="sessionId" value="${esc(c.sessionId || '')}" placeholder="optional: continue an existing ${isCodex ? 'Codex' : 'Claude Code'} conversation" spellcheck="false" pattern="[0-9a-fA-F-]{36}">
+        <small>Paste a ${isCodex ? 'session ID (shown by <code>codex resume</code>)' : 'session ID (shown by <code>claude --resume</code>)'} to reconnect this agent to that conversation's memory.</small></label>`;
   }
 
   function groupSettingsHtml(g) {
@@ -850,12 +1097,26 @@
     const count = c.messageCount ?? activeMessages.length;
     $('#infoMeta').innerHTML = isGroup
       ? `Group · ${(c.members || []).length} agents · ${count} messages${cost}`
-      : `${esc(modelName(c.model))} · ${count} messages${cost}<br><small>${c.sessionId ? 'session ' + esc(c.sessionId.slice(0, 8)) : 'no session yet'}</small>`;
+      : `${esc(modelName(c.model))} · ${count} messages${cost}<br><small>${c.sessionId ? 'session ' + esc(c.sessionId.slice(0, 8)) : 'no session yet'}</small>${statsHtml(c)}`;
     $('#infoForm').innerHTML = isGroup ? groupSettingsHtml(c) : agentSettingsHtml(c);
     $('#btnPin').textContent = c.pinned ? '📌 Unpin chat' : '📌 Pin chat';
     $('#btnMute').textContent = c.muted ? '🔔 Unmute notifications' : '🔕 Mute notifications';
     $('#btnDelete').textContent = isGroup ? '🗑️ Delete group' : '🗑️ Delete agent';
     $('#infoEmojis').innerHTML = meta.avatars.map((a) => `<button type="button" data-a="${a}">${a}</button>`).join('');
+  }
+
+  // Per-agent totals, counting its work in groups too.
+  function statsHtml(c) {
+    const st = c.stats;
+    if (!st?.turns) return '';
+    const cells = [
+      [st.turns, st.turns === 1 ? 'turn' : 'turns'],
+      [tokenCount(st.tokens), 'tokens'],
+      ...(st.cost ? [[money(st.cost), 'est. cost']] : []),
+      ...(st.errors ? [[st.errors, st.errors === 1 ? 'error' : 'errors']] : []),
+    ];
+    return `<div class="stats">${cells.map(([v, l]) => `<span><b>${esc(v)}</b>${esc(l)}</span>`).join('')}</div>` +
+      (st.lastAt ? `<small>last worked ${esc(ago(st.lastAt))}</small>` : '');
   }
 
   $('#infoAvatar').onclick = () => ($('#infoEmojis').hidden = !$('#infoEmojis').hidden);
@@ -927,9 +1188,10 @@
     if (e.target.name === 'provider') {
       const first = modelsFor(v.provider)[0];
       v.model = first?.id;
-      v.effort = v.provider === 'antigravity' ? 'medium' : 'high';
-      if (v.provider === 'antigravity' && newAvatar === meta.avatars[agents().length % meta.avatars.length]) {
-        newAvatar = '✨';
+      v.effort = first?.defaultEffort || (v.provider === 'claude' ? 'high' : 'medium');
+      const icon = { antigravity: '✨', codex: '🧪' }[v.provider];
+      if (icon && (newAvatar === meta.avatars[agents().length % meta.avatars.length] || ['✨', '🧪'].includes(newAvatar))) {
+        newAvatar = icon;
         $('#newAvatars').querySelectorAll('button').forEach((x) => x.classList.toggle('sel', x.dataset.a === newAvatar));
       }
     }
@@ -1120,8 +1382,8 @@
     $('#ucSpend').innerHTML = sp ? `
       <div class="sp-tot"><span>Today ${money(sp.today)}</span><span>7 days ${money(sp.week)}</span></div>
       ${usage.agents.filter((a) => a.total > 0 || a.tokens > 0).slice(0, 8).map((a) => `
-        <div class="sp-row"><span>${esc(a.avatar)}</span><span>${esc(a.name)}</span><span>${a.provider === 'antigravity' ? `${tokenCount(a.tokens)} tokens` : `${money(a.today)} today · ${money(a.total)}`}</span></div>`).join('') || '<div class="sp-row"><span></span><span>No activity yet</span><span></span></div>'}
-      <div class="uc-foot">Estimated API-equivalent cost reported by Claude Code. On a Pro/Max plan your agents count against the limits above instead. Antigravity agents show tokens used, which count against your Google plan, not the limits above.</div>` : '';
+        <div class="sp-row"><span>${esc(a.avatar)}</span><span>${esc(a.name)}</span><span>${a.provider !== 'claude' ? `${tokenCount(a.tokens)} tokens` : `${money(a.today)} today · ${money(a.total)}`}</span></div>`).join('') || '<div class="sp-row"><span></span><span>No activity yet</span><span></span></div>'}
+      <div class="uc-foot">Estimated API-equivalent cost reported by Claude Code. On a Pro/Max plan your agents count against the limits above instead. Antigravity and Codex agents show tokens used, which count against your Google or OpenAI plan, not the limits above.</div>` : '';
   }
 
   $('#usageMini').onclick = (e) => {
