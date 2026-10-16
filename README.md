@@ -4,7 +4,7 @@ WhatsApp-style messenger where every chat is a Claude Code agent.
 
 > Unofficial community project. Not affiliated with or endorsed by Anthropic or WhatsApp. It drives your own locally installed [Claude Code](https://claude.com/claude-code) CLI, so agent usage counts against your own Claude plan.
 
-**Features:** one chat per agent, each with its own folder, model and effort · group chats where agents talk to each other · Codex-style approvals for risky actions · live session and weekly usage meter · broadcast · attachments, voice input and replies · Windows `.exe` with its own app window.
+**Features:** one chat per agent, each with its own folder, model and effort · **Claude Code and Google Antigravity (Gemini 3.8 Flash and more) agents side by side** · group chats where agents talk to each other · Codex-style approvals for risky actions · live session and weekly usage meter · broadcast · attachments, voice input and replies · Windows `.exe` with its own app window.
 
 Licensed under the [MIT License](LICENSE).
 
@@ -29,6 +29,14 @@ This builds `ClaudeChat.exe` (Windows x64, ~90 MB) under `dist/exe-builder/`. Ea
 Double-click it and ClaudeChat opens in **its own app window**: no tabs or address bar, with its own ClaudeChat icon in the taskbar. It uses Edge's or Chrome's "app mode", one of which every Windows PC has. There's no console window, and **closing the window quits ClaudeChat**. Starting it again while it's open just opens another window. Chats are saved in a `data` folder next to the exe, and `data/claudechat.log` has the server log. `Start ClaudeChat.bat` opens the same app window when you run from source.
 
 The build uses Node's single-executable-app feature. Instead of `postject`, it embeds the app with a tiny injector (`build/inject.cs`) compiled by Windows' built-in C# compiler, so nothing gets downloaded. The exe is unsigned, so the first launch may show Windows SmartScreen: choose **More info → Run anyway**.
+
+## Google Antigravity (Gemini) agents
+
+If the [Antigravity](https://antigravity.google) CLI (`agy`) is installed, pick **Provider → Antigravity (Gemini)** when creating an agent. ClaudeChat loads Antigravity's model list at startup, for example **Gemini 3.8 Flash** (Low/Medium/High effort), Claude Sonnet 4.6 and Opus 4.6, and GPT-OSS 120B. Gemini and Claude agents can sit in the same group chat.
+
+- **Approvals:** Antigravity's headless mode can't stop to ask, so it blocks commands. ClaudeChat runs its danger check on each blocked command. Safe ones it runs itself, risky ones get the usual Allow/Deny card, and the result goes back to the agent. Only the exact command that was checked ever runs. File edits inside the agent's folders happen directly.
+- **Usage:** Antigravity agents show tokens used in the usage card. They count against your Google plan, not your Claude limits.
+- **Notes:** Antigravity has no system-prompt flag, so an agent's instructions go along with its first message. Antigravity can't start in a working folder with a very long path, so pick a short folder.
 
 ## How it works
 

@@ -24,6 +24,18 @@ function resolveClaude() {
 }
 const CLAUDE_BIN = resolveClaude();
 
+// Google Antigravity's CLI (`agy`): $AGY_BIN, then PATH, then its default install folder.
+function resolveAgy() {
+  if (process.env.AGY_BIN) return process.env.AGY_BIN;
+  const name = process.platform === 'win32' ? 'agy.exe' : 'agy';
+  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+    if (dir && fs.existsSync(path.join(dir, name))) return path.join(dir, name);
+  }
+  const local = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'agy', 'bin', name);
+  return fs.existsSync(local) ? local : null;
+}
+const AGY_BIN = resolveAgy();
+
 // Packaged as ClaudeChat.exe (Node single-executable app): web files live inside the exe
 // and data/ sits next to the exe. Run with plain node: everything is next to this file.
 let sea = null;
@@ -45,7 +57,71 @@ const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 // sends every permission prompt here, where danger.js decides what needs the user.
 const PERMISSION_MODES = ['smart', 'ask', 'auto', 'acceptEdits', 'plan', 'bypassPermissions'];
 const CLI_MODE = { smart: 'manual', ask: 'manual' };
-const AVATARS = ['🤖', '🧠', '🛠️', '🚀', '🦊', '🐙', '🦉', '⚡', '🧪', '🎨', '📚', '🔍', '👥', '🎯', '🐞', '💡'];
+const AVATARS = ['🤖', '🧠', '🛠️', '🚀', '🦊', '🐙', '🦉', '⚡', '🧪', '🎨', '📚', '🔍', '👥', '🎯', '🐞', '💡', '✨', '💎'];
+
+// Antigravity's models, from `agy models`. Variants like gemini-3.8-flash-low/-medium/-high
+// are folded into one model whose variants become ClaudeChat's effort levels.
+const AGY_FALLBACK_MODELS = [
+  ['gemini-3.8-flash-high', 'Gemini 3.8 Flash (High)'],
+  ['gemini-3.8-flash-medium', 'Gemini 3.8 Flash (Medium)'],
+  ['gemini-3.8-flash-low', 'Gemini 3.8 Flash (Low)'],
+  ['claude-sonnet-4-6', 'Claude Sonnet 4.6 (Thinking)'],
+  ['claude-opus-4-6-thinking', 'Claude Opus 4.6 (Thinking)'],
+  ['gpt-oss-120b-medium', 'GPT-OSS 120B (Medium)'],
+];
+let agyModels = groupAgyModels(AGY_FALLBACK_MODELS);
+
+function groupAgyModels(pairs) {
+  const byBase = new Map();
+  for (const [id, label] of pairs) {
+    const m = id.match(/^(.+)-(low|medium|high|xhigh|max)$/);
+    const base = m ? m[1] : id;
+    const name = label.replace(/\s*\((Low|Medium|High|XHigh|Max)\)\s*$/i, '').trim() || base;
+    if (!byBase.has(base)) byBase.set(base, { id: base, name, efforts: [], variants: {} });
+    const entry = byBase.get(base);
+    if (m) { entry.efforts.push(m[2]); entry.variants[m[2]] = id; } else entry.variants[''] = id;
+  }
+  for (const e of byBase.values()) e.efforts.sort((a, b) => EFFORTS.indexOf(a) - EFFORTS.indexOf(b));
+  return [...byBase.values()];
+}
+
+function loadAgyModels() {
+  if (!AGY_BIN) return;
+  let out = '';
+  const p = spawn(AGY_BIN, ['models'], { cwd: os.homedir(), windowsHide: true });
+  p.stdout.on('data', (d) => { out += d; });
+  p.on('error', () => {});
+  p.on('close', () => {
+    const pairs = out.split(/\r?\n/).map((l) => l.split('\t')).filter((x) => x.length === 2 && /^[\w.-]+$/.test(x[0]));
+    if (pairs.length) agyModels = groupAgyModels(pairs);
+  });
+}
+
+const findAgyModel = (id) => agyModels.find((m) => m.id === id);
+
+// The concrete model id to pass to `agy --model` for an agent's model + effort.
+function agyModelId(agent) {
+  const m = findAgyModel(agent.model);
+  if (!m) return agent.model;
+  if (!m.efforts.length) return m.variants[''] || m.id;
+  const effort = m.efforts.includes(agent.effort) ? agent.effort : (m.efforts.includes('medium') ? 'medium' : m.efforts[0]);
+  return m.variants[effort];
+}
+
+function providersMeta() {
+  return {
+    claude: {
+      name: 'Claude Code',
+      available: true,
+      models: Object.entries(MODELS).map(([id, name]) => ({ id, name, efforts: EFFORTS })),
+    },
+    antigravity: {
+      name: 'Antigravity (Gemini)',
+      available: !!AGY_BIN,
+      models: agyModels.map((m) => ({ id: m.id, name: m.name, efforts: m.efforts })),
+    },
+  };
+}
 const COLORS = ['#25d366', '#53bdeb', '#ff8a65', '#c792ea', '#ffcb6b', '#f07178', '#89ddff', '#a5e075'];
 
 // ---------- persistence ----------
@@ -70,6 +146,7 @@ try {
 // Upgrade chats saved by older versions and clear state left over from a previous run.
 for (const c of db.chats) {
   c.type ??= 'agent';
+  c.provider ??= 'claude';
   c.fullAccess ??= true;
   c.members ??= [];
   c.memberSessions ??= {};
@@ -210,8 +287,8 @@ function usageReport() {
     }
   }
   const agents = db.chats
-    .map((c) => ({ id: c.id, name: c.name, avatar: c.avatar, color: c.color, today: perChatToday[c.id] || 0, total: c.totalCost || 0 }))
-    .sort((a, b) => b.today - a.today || b.total - a.total);
+    .map((c) => ({ id: c.id, name: c.name, avatar: c.avatar, color: c.color, provider: c.provider, today: perChatToday[c.id] || 0, total: c.totalCost || 0, tokens: c.totalTokens || 0 }))
+    .sort((a, b) => b.today - a.today || b.total - a.total || b.tokens - a.tokens);
   return { limits: db.usage, spend: { today, week }, agents };
 }
 
@@ -236,7 +313,12 @@ function probeUsage() {
 
 // ---------- running the claude CLI ----------
 
-function runOnce({ chat, agent, sessionId, systemPrompt, prompt, from }) {
+// One agent turn, on whichever CLI the agent uses. Resolves { sessionId, ok, stopped }.
+function runOnce(opts) {
+  return opts.agent.provider === 'antigravity' ? runAntigravity(opts) : runClaude(opts);
+}
+
+function runClaude({ chat, agent, sessionId, systemPrompt, prompt, from }) {
   return new Promise((resolve) => {
     // Two-way stdio: the prompt goes in as a stream-json message, and the CLI sends its
     // permission prompts back to us as control requests (answered in onControlRequest).
@@ -352,6 +434,14 @@ function decideApproval(id, decision, note) {
   const { chat, run, agent } = p;
   if (decision === 'always' && !agent.allowRules.includes(p.ruleKey)) agent.allowRules.push(p.ruleKey);
   const allowed = decision === 'allow' || decision === 'always';
+  if (p.resolve) {
+    // Antigravity approvals: ClaudeChat itself carries out (or refuses) the blocked action.
+    patchMessage(chat, p.message, { approval: { ...p.message.approval, status: allowed ? (decision === 'always' ? 'always' : 'allowed') : 'denied', note: note || undefined } });
+    broadcast({ type: 'chat', chat: summary(chat) });
+    save();
+    p.resolve({ allowed, note });
+    return true;
+  }
   if (!allowed) run.userDenials = (run.userDenials || 0) + 1;
   const response = allowed
     ? { behavior: 'allow', updatedInput: p.input }
@@ -451,6 +541,299 @@ function handleEvent(chat, run, ev) {
       pushMessage(chat, { role: 'system', text: `Blocked by permissions: ${[...new Set(denied)].join(', ')}. Change the agent's permission mode in its info panel to allow this.` });
     }
   }
+}
+
+// ---------- running Google Antigravity (agy) ----------
+// agy's headless mode can't forward permission prompts: it auto-denies commands (and other
+// gated actions) and ends the turn. ClaudeChat then checks each blocked command with
+// danger.js. Safe ones it runs itself and risky ones get an approval card, and the output
+// (or the denial) goes back to the agent as a follow-up turn on the same conversation.
+// Only the exact command that was checked ever runs.
+
+const AGY_TOOL_NAMES = {
+  run_command: 'Command', write_to_file: 'Write', replace_file_content: 'Edit', multi_replace_file_content: 'Edit',
+  view_file: 'Read', list_dir: 'List', grep_search: 'Search', find_by_name: 'Find', search_web: 'WebSearch', read_url_content: 'WebFetch',
+};
+const SHELL_TOOL = process.platform === 'win32' ? 'PowerShell' : 'Bash';
+const MAX_AGY_ROUNDS = 15;
+
+function agyTurn({ chat, agent, sessionId, prompt, from, skipPermissions, cwd }) {
+  return new Promise((resolve) => {
+    const args = ['--input-format', 'stream-json', '--output-format', 'stream-json', '--model', agyModelId(agent)];
+    if (sessionId) args.push('--conversation', sessionId);
+    const mode = agent.permissionMode;
+    if (skipPermissions || mode === 'bypassPermissions') args.push('--dangerously-skip-permissions');
+    else if (mode === 'plan') args.push('--mode', 'plan');
+    else if (mode === 'acceptEdits') args.push('--mode', 'accept-edits');
+    else if (mode === 'auto') args.push('--mode', 'auto');
+    const dirs = new Set([UPLOAD_DIR]);
+    if (agent.fullAccess !== false) for (const d of listDrives()) dirs.add(d);
+    for (const d of dirs) args.push('--add-dir', d);
+    args.push('--print='); // print mode; the prompt arrives on stdin as stream-json
+
+    const proc = spawn(AGY_BIN, args, { cwd, windowsHide: true, env: process.env });
+    const run = {
+      proc, agent, cwd, from, who: from?.name, sessionId, steps: new Map(), commands: [], pending: new Set(), stderr: '', denied: [],
+      // During a one-off "skip permissions" retry, ClaudeChat still stops unchecked risky commands.
+      skipWatch: skipPermissions && mode !== 'bypassPermissions',
+    };
+    runs.set(chat.id, run);
+    status(chat, run, 'typing…');
+    proc.stdin.on('error', () => {});
+    proc.stdin.end(JSON.stringify({ event: 'user', message: { role: 'user', content: prompt } }) + '\n');
+
+    let buf = '';
+    proc.stdout.on('data', (chunk) => {
+      buf += chunk.toString('utf8');
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        let ev;
+        try { ev = JSON.parse(line); } catch { continue; }
+        try { handleAgyEvent(chat, run, ev); } catch (e) { console.error('agy event error', e); }
+      }
+    });
+    proc.stderr.on('data', (d) => { run.stderr += d.toString('utf8'); });
+    proc.on('error', (err) => {
+      run.spawnError = true;
+      pushMessage(chat, { role: 'system', text: `Could not start Antigravity (agy): ${err.message}`, error: true });
+    });
+    proc.on('close', (code) => {
+      runs.delete(chat.id);
+      for (const s of run.steps.values()) if (s.role === 'assistant' && s.msg.streaming) patchMessage(chat, s.msg, { streaming: false });
+      // The commands agy refused are the last N run_command steps of this turn.
+      const cmdDenials = run.denied.filter((d) => d.action === 'command').length;
+      const blocked = run.commands.slice(Math.max(0, run.commands.length - cmdDenials)).map((c) => ({ kind: 'command', ...c }));
+      for (const d of run.denied) if (d.action !== 'command') blocked.push({ kind: 'other', action: d.action, name: d.display_name || d.action });
+      if (!run.gotResult && code !== 0 && !run.stopped && !run.spawnError) {
+        const tail = run.stderr.trim().split('\n').slice(-6).join('\n');
+        pushMessage(chat, { role: 'system', text: `${run.who ? run.who + ' ' : 'Agent '}exited (code ${code}).${tail ? '\n' + tail : ''}`, error: true });
+      }
+      save();
+      resolve({ sessionId: run.sessionId, ok: !!run.gotResult && !run.isError, stopped: !!run.stopped, blocked });
+    });
+  });
+}
+
+function handleAgyEvent(chat, run, ev) {
+  if (ev.event === 'init') {
+    const id = ev.init?.conversation_id || ev.conversation_id;
+    if (id) run.sessionId = id;
+    return;
+  }
+
+  if (ev.event === 'step_update') {
+    const s = ev.step_update || {};
+    if (s.conversation_id) run.sessionId = s.conversation_id;
+    const key = s.step_index;
+
+    if (s.step_type === 'agent_response') {
+      if (s.text_delta) {
+        let st = run.steps.get(key);
+        if (!st) {
+          st = { role: 'assistant', msg: pushMessage(chat, { role: 'assistant', text: '', streaming: true, from: run.from }) };
+          run.steps.set(key, st);
+        }
+        st.msg.text += s.text_delta;
+        broadcast({ type: 'delta', chatId: chat.id, messageId: st.msg.id, text: s.text_delta });
+        status(chat, run, 'typing…');
+      } else if (s.state === 'ACTIVE') {
+        status(chat, run, 'thinking…');
+      }
+      if (s.state === 'DONE') {
+        const st = run.steps.get(key);
+        if (st && st.msg.streaming) patchMessage(chat, st.msg, { text: st.msg.text.replace(/\s+$/, ''), streaming: false });
+      }
+      return;
+    }
+
+    if (s.step_type === 'tool') {
+      const name = s.tool_name || s.tool_info?.name || 'tool';
+      const params = s.tool_info?.parameters || {};
+      let st = run.steps.get(key);
+      if (!st) {
+        const input = name === 'run_command' ? { command: params.CommandLine, ...params } : params;
+        st = { role: 'tool', name, msg: pushMessage(chat, { role: 'tool', from: run.from, tool: { id: String(key), name: AGY_TOOL_NAMES[name] || name, input, status: 'running' } }) };
+        run.steps.set(key, st);
+        if (name === 'run_command') {
+          const command = String(params.CommandLine || '');
+          run.commands.push({ command, cwd: params.Cwd, msg: st.msg });
+          if (run.skipWatch && assess(SHELL_TOOL, { command }, run.cwd, os.homedir()).risky) {
+            run.stopped = true;
+            run.proc.kill();
+            pushMessage(chat, { role: 'system', text: `Stopped ${run.who || 'the agent'}: during an approved retry it tried a risky command you hadn't approved:\n${command}`, error: true });
+          }
+        }
+        status(chat, run, `using ${AGY_TOOL_NAMES[name] || name}…`);
+      }
+      if (s.state && s.state !== 'ACTIVE') {
+        patchMessage(chat, st.msg, { tool: { ...st.msg.tool, status: s.state === 'DONE' ? 'done' : 'error', result: s.error || st.msg.tool.result } });
+      }
+      return;
+    }
+
+    if (s.state === 'ACTIVE') status(chat, run, 'working…');
+    return;
+  }
+
+  if (ev.event === 'result') {
+    const r = ev.result || {};
+    run.gotResult = true;
+    run.isError = r.status === 'ERROR';
+    if (r.conversation_id) run.sessionId = r.conversation_id;
+    run.denied = r.denied_actions || [];
+    const tokens = r.usage?.total_tokens || 0;
+    chat.totalTokens = (chat.totalTokens || 0) + tokens;
+    chat.lastTurn = { durationMs: Math.round((r.duration_seconds || 0) * 1000), tokens, turns: r.num_turns };
+    const replied = [...run.steps.values()].some((x) => x.role === 'assistant' && x.msg.text.trim());
+    if (run.isError && replied) {
+      // A server hiccup after the answer already arrived: keep the reply, mention it quietly.
+      run.isError = false;
+      pushMessage(chat, { role: 'system', text: `Antigravity hit a server error after replying (${String(r.error || '').slice(0, 120)}). The reply above is complete.` });
+    } else if (run.isError) {
+      pushMessage(chat, { role: 'system', text: `${run.who ? run.who + ': ' : ''}Error: ${r.error || 'Antigravity reported an error'}`, error: true });
+    } else if (r.response?.trim() && ![...run.steps.values()].some((x) => x.role === 'assistant')) {
+      // Nothing streamed (rare): show the final answer from the result.
+      pushMessage(chat, { role: 'assistant', text: r.response.trim(), from: run.from });
+    }
+  }
+}
+
+function askApproval(chat, agent, from, tool, input, a) {
+  return new Promise((resolve) => {
+    const id = uid();
+    const message = pushMessage(chat, {
+      role: 'approval',
+      from,
+      approval: {
+        id, tool, input, summary: a.summary,
+        reasons: a.reasons.length ? a.reasons : ['This agent asks before every command'],
+        agentName: agent.name,
+        status: 'pending',
+      },
+    });
+    const run = { who: from?.name, pending: new Set([id]) };
+    approvals.set(id, { chat, run, agent, ruleKey: a.ruleKey, message, resolve });
+    status(chat, run, 'waiting for your approval');
+    broadcast({ type: 'chat', chat: summary(chat) });
+  });
+}
+
+// Resolves every Antigravity approval still waiting in this chat as "not allowed".
+function expireApprovals(chatId) {
+  for (const [id, p] of approvals) {
+    if (p.chat.id !== chatId || !p.resolve) continue;
+    approvals.delete(id);
+    patchMessage(p.chat, p.message, { approval: { ...p.message.approval, status: 'expired' } });
+    p.resolve({ allowed: false, expired: true });
+  }
+}
+
+// Runs exactly one approved command the way the agent asked, and captures its output.
+function runShell(chat, command, cwd, from) {
+  return new Promise((resolve) => {
+    const win = process.platform === 'win32';
+    // -EncodedCommand passes the command byte-for-byte, so quotes can't be re-interpreted.
+    // The preamble switches PowerShell and child programs like `cmd /c dir` to UTF-8; without
+    // it, output comes back in the PC's legacy code page (e.g. CP866) and shows as gibberish.
+    const preamble = '[Console]::OutputEncoding = [Text.Encoding]::UTF8; $OutputEncoding = [Text.Encoding]::UTF8; chcp 65001 > $null; ';
+    const args = win
+      ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(preamble + command, 'utf16le').toString('base64')]
+      : ['-lc', command];
+    const proc = spawn(win ? 'powershell.exe' : 'bash', args, { cwd, windowsHide: true });
+    const run = { proc, who: from?.name, pending: new Set() };
+    runs.set(chat.id, run);
+    status(chat, run, 'running a command…');
+    let out = '';
+    const add = (d) => { if (out.length < 60000) out += d.toString('utf8'); };
+    proc.stdout.on('data', add);
+    proc.stderr.on('data', add);
+    const timer = setTimeout(() => { out += '\n[ClaudeChat stopped the command after 10 minutes]'; proc.kill(); }, 10 * 60000);
+    proc.on('error', (e) => { out += `\n${e.message}`; });
+    proc.on('close', (code) => {
+      clearTimeout(timer);
+      runs.delete(chat.id);
+      resolve({ code: code ?? 1, output: out.trim().slice(0, 20000), stopped: !!run.stopped });
+    });
+  });
+}
+
+async function handleBlocked(chat, agent, from, b, cwd) {
+  if (b.kind === 'command') {
+    const cmd = b.command;
+    const card = b.msg;
+    const setCard = (patch) => card && patchMessage(chat, card, { tool: { ...card.tool, ...patch } });
+    if (agent.permissionMode === 'plan') {
+      setCard({ status: 'error', result: 'Not run: plan mode is read-only' });
+      return { text: `Command: ${cmd}\nNot run: this agent is in plan (read-only) mode.` };
+    }
+    const a = assess(SHELL_TOOL, { command: cmd }, cwd, os.homedir());
+    const remembered = (agent.allowRules || []).includes(a.ruleKey);
+    const mustAsk = (agent.permissionMode === 'ask' || a.risky) && !remembered;
+    console.log(`[agy] ${agent.name}: ${cmd.slice(0, 80)} -> ${mustAsk ? 'ASK' : 'run'}${a.reasons.length ? ' (' + a.reasons.join('; ') + ')' : ''}`);
+    if (mustAsk) {
+      setCard({ status: 'running', result: 'Waiting for your approval…' });
+      const { allowed, note } = await askApproval(chat, agent, from, SHELL_TOOL, { command: cmd }, a);
+      if (!allowed) {
+        setCard({ status: 'error', result: 'Not run: you denied it' });
+        return { text: `Command: ${cmd}\nThe user DENIED this command${note ? ` and said: ${note}` : ''}. Do not try to run it another way. Take a different approach or ask the user.` };
+      }
+    }
+    setCard({ status: 'running', result: undefined });
+    const dir = b.cwd && fs.existsSync(b.cwd) ? b.cwd : cwd;
+    const r = await runShell(chat, cmd, dir, from);
+    setCard({ status: r.code === 0 ? 'done' : 'error', result: r.output || '(no output)' });
+    return { text: `Command: ${cmd}\nExit code: ${r.code}\nOutput:\n${r.output || '(no output)'}` };
+  }
+
+  // Any other action agy gated (e.g. browser control): ask, then let agy retry it once.
+  const a = { risky: true, reasons: [`Antigravity needs permission for: ${b.name}`], summary: b.name, ruleKey: `agy:${b.action}` };
+  if (!(agent.allowRules || []).includes(a.ruleKey)) {
+    const { allowed, note } = await askApproval(chat, agent, from, b.name, {}, a);
+    if (!allowed) return { text: `Action "${b.name}" was DENIED by the user${note ? ` and they said: ${note}` : ''}. Do not retry it.` };
+  }
+  return { text: `The user approved "${b.name}". Retry that action now.`, skip: true };
+}
+
+async function runAntigravity({ chat, agent, sessionId, systemPrompt, prompt, from }) {
+  if (!AGY_BIN) {
+    pushMessage(chat, { role: 'system', text: 'Antigravity CLI (agy) not found. Install Google Antigravity and its CLI, then restart ClaudeChat.', error: true });
+    return { sessionId, ok: false };
+  }
+  let cwd = agent.cwd;
+  if (!cwd || !fs.existsSync(cwd)) cwd = os.homedir();
+  if (process.platform === 'win32' && cwd.length > 240) {
+    pushMessage(chat, { role: 'system', text: `Antigravity can't start in a folder path this long (${cwd.length} characters). Pick a shorter working folder.`, error: true });
+    return { sessionId, ok: false };
+  }
+  // agy has no system-prompt flag, so instructions ride along with the first message.
+  if (!sessionId && systemPrompt) prompt = `[Instructions for this conversation]\n${systemPrompt}\n\n[Message]\n${prompt}`;
+
+  let skip = false;
+  for (let round = 0; round < MAX_AGY_ROUNDS; round++) {
+    const r = await agyTurn({ chat, agent, sessionId, prompt, from, skipPermissions: skip, cwd });
+    if (r.sessionId) sessionId = r.sessionId;
+    if (r.stopped || stopFlags.has(chat.id) || !r.ok || !r.blocked.length) {
+      // agy marks blocked commands as finished; make clear they never ran.
+      for (const b of r.blocked) {
+        if (b.msg) patchMessage(chat, b.msg, { tool: { ...b.msg.tool, status: 'error', result: 'Not run: the turn ended before ClaudeChat could check it' } });
+      }
+      return { sessionId, ok: r.ok, stopped: r.stopped };
+    }
+    skip = false;
+    const notes = [];
+    for (const b of r.blocked) {
+      const h = await handleBlocked(chat, agent, from, b, cwd);
+      if (stopFlags.has(chat.id)) return { sessionId, ok: false, stopped: true };
+      notes.push(h.text);
+      if (h.skip) skip = true;
+    }
+    prompt = `[ClaudeChat] Your headless sandbox blocked ${notes.length === 1 ? 'an action' : 'some actions'}, so ClaudeChat checked and handled ${notes.length === 1 ? 'it' : 'them'} for you:\n\n${notes.join('\n\n---\n\n')}\n\nContinue the task from here.`;
+  }
+  pushMessage(chat, { role: 'system', text: `Paused after ${MAX_AGY_ROUNDS} rounds of blocked actions. Send a message to continue.` });
+  return { sessionId, ok: true };
 }
 
 // ---------- turns ----------
@@ -576,7 +959,16 @@ function json(res, status, body) {
 function applySettings(chat, body) {
   if (typeof body.name === 'string' && body.name.trim()) chat.name = body.name.trim().slice(0, 60);
   if (typeof body.avatar === 'string' && body.avatar.trim()) chat.avatar = body.avatar.trim().slice(0, 8);
-  if (MODELS[body.model]) chat.model = body.model;
+  // Switching provider starts a fresh conversation on the new CLI, with that provider's default model.
+  if ((body.provider === 'claude' || body.provider === 'antigravity') && body.provider !== chat.provider) {
+    chat.provider = body.provider;
+    chat.sessionId = null;
+    chat.model = chat.provider === 'antigravity' ? (agyModels[0]?.id || 'gemini-3.8-flash') : 'claude-opus-5-5';
+    chat.effort = chat.provider === 'antigravity' ? 'medium' : 'high';
+  }
+  if (chat.provider === 'antigravity') {
+    if (typeof body.model === 'string' && /^[\w.-]+$/.test(body.model) && (findAgyModel(body.model) || !agyModels.length)) chat.model = body.model;
+  } else if (MODELS[body.model]) chat.model = body.model;
   if (EFFORTS.includes(body.effort)) chat.effort = body.effort;
   if (PERMISSION_MODES.includes(body.permissionMode)) chat.permissionMode = body.permissionMode;
   if (typeof body.cwd === 'string') chat.cwd = body.cwd.trim();
@@ -651,7 +1043,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (route === 'meta') {
-      return json(res, 200, { models: MODELS, efforts: EFFORTS, permissionModes: PERMISSION_MODES, home: os.homedir(), avatars: AVATARS, drives: listDrives(), platform: process.platform });
+      return json(res, 200, { models: MODELS, providers: providersMeta(), efforts: EFFORTS, permissionModes: PERMISSION_MODES, home: os.homedir(), avatars: AVATARS, drives: listDrives(), platform: process.platform });
     }
 
     if (route === 'usage' && !parts[2]) return json(res, 200, usageReport());
@@ -734,6 +1126,7 @@ const server = http.createServer(async (req, res) => {
           name: isGroup ? 'New group' : 'New agent',
           avatar: isGroup ? '👥' : AVATARS[n % AVATARS.length],
           color: COLORS[n % COLORS.length],
+          provider: 'claude',
           model: 'claude-opus-5-5',
           effort: 'high',
           permissionMode: 'smart',
@@ -777,6 +1170,7 @@ const server = http.createServer(async (req, res) => {
         stopFlags.add(chat.id);
         queues.delete(chat.id);
         runs.get(chat.id)?.proc.kill();
+        expireApprovals(chat.id);
         db.chats = db.chats.filter((c) => c !== chat);
         for (const g of db.chats) if (g.type === 'group') g.members = g.members.filter((m) => m !== chat.id);
         save();
@@ -809,6 +1203,7 @@ const server = http.createServer(async (req, res) => {
         if (busy.has(chat.id)) stopFlags.add(chat.id);
         const run = runs.get(chat.id);
         if (run) { run.stopped = true; run.proc.kill(); }
+        expireApprovals(chat.id);
         return json(res, 200, { ok: true });
       }
 
@@ -817,6 +1212,7 @@ const server = http.createServer(async (req, res) => {
         stopFlags.add(chat.id);
         queues.delete(chat.id);
         runs.get(chat.id)?.proc.kill();
+        expireApprovals(chat.id);
         chat.sessionId = null;
         chat.memberSessions = {};
         chat.memberCursor = {};
@@ -913,8 +1309,11 @@ server.on('error', (e) => {
   throw e;
 });
 
+loadAgyModels();
+
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`ClaudeChat running at ${APP_URL}`);
+  console.log(`Claude Code: ${CLAUDE_BIN} | Antigravity: ${AGY_BIN || 'not installed'}`);
   console.log(`Chats are saved in ${DATA_DIR}`);
   if (APP_MODE) {
     process.title = 'ClaudeChat';

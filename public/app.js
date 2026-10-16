@@ -10,7 +10,12 @@
     'claude-opus-5-5': 'Default · great for coding',
     'claude-sonnet-5-5': 'Fast everyday work',
     'claude-haiku-5-5': 'Fastest · lightest on usage',
+    'gemini-3.8-flash': 'Google · fast, great default',
+    'claude-sonnet-4-6': 'Anthropic, via Antigravity',
+    'claude-opus-4-6-thinking': 'Anthropic, via Antigravity',
+    'gpt-oss-120b': 'Open model, via Antigravity',
   };
+  const PROVIDER_SHORT = { claude: 'Claude Code', antigravity: 'Antigravity' };
   const PERMISSION_INFO = {
     smart: 'Ask when risky: safe actions run, risky ones wait for your OK (recommended)',
     ask: 'Ask every time: approve each edit and command',
@@ -106,11 +111,24 @@
     if (label === 'Yesterday' || !label.match(/\d/)) return label;
     return new Date(ts).toLocaleDateString();
   }
-  const modelName = (id) => (meta?.models?.[id]) || id;
+  // Providers (Claude Code, Antigravity) each have their own models; some models (like
+  // Gemini 3.8 Flash's Low/Medium/High variants) have their own effort levels.
+  const providerOf = (c) => c?.provider || 'claude';
+  const modelsFor = (prov) => meta?.providers?.[prov]?.models || [];
+  const modelInfo = (prov, id) => modelsFor(prov).find((m) => m.id === id);
+  const effortsFor = (c) => modelInfo(providerOf(c), c.model)?.efforts || [];
+  function modelName(id) {
+    for (const p of Object.values(meta?.providers || {})) {
+      const m = p.models.find((x) => x.id === id);
+      if (m) return m.name;
+    }
+    return meta?.models?.[id] || id;
+  }
   const shortPath = (p) => (p || '').replace(/\\/g, '/').split('/').filter(Boolean).slice(-2).join('/') || p;
   const agents = () => [...chats.values()].filter((c) => c.type !== 'group');
   const membersOf = (g) => (g.members || []).map((id) => chats.get(id)).filter(Boolean);
   const money = (n) => (n >= 1 ? `$${n.toFixed(2)}` : n > 0 ? `$${n.toFixed(3)}` : '$0');
+  const tokenCount = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n || 0));
 
   const TICKS = '<svg viewBox="0 0 16 11"><path d="M11.07.65 4.5 7.22 1.93 4.65.5 6.07l4 4 8-8zM15.07.65 8.5 7.22l-.7-.7-1.42 1.42 2.12 2.13 8-8z"/></svg>';
   function tickHtml(m) {
@@ -235,15 +253,18 @@
       sub.textContent = (c.status || 'typing…') + (c.queued ? ` · ${c.queued} queued` : '');
       sub.className = 'head-sub typing';
     } else {
-      sub.textContent = isGroup ? [...membersOf(c).map((a) => a.name), 'You'].join(', ') : `online · ${shortPath(c.cwd)}${c.fullAccess !== false ? ' · full PC access' : ''}`;
+      sub.textContent = isGroup ? [...membersOf(c).map((a) => a.name), 'You'].join(', ') : `online · ${PROVIDER_SHORT[providerOf(c)]} · ${shortPath(c.cwd)}${c.fullAccess !== false ? ' · full PC access' : ''}`;
       sub.title = isGroup ? '' : c.cwd || '';
       sub.className = 'head-sub';
     }
     $('#modelWrap').hidden = isGroup;
     if (!isGroup) {
+      const efforts = effortsFor(c);
+      const effort = efforts.includes(c.effort) ? c.effort : (efforts.includes('medium') ? 'medium' : efforts[0]);
       $('#mpModel').textContent = modelName(c.model);
-      $('#mpEffort').textContent = EFFORT_LABEL[c.effort] || c.effort;
-      $('#mpRing').querySelector('.ring-fg').style.strokeDashoffset = 44 * (1 - (EFFORT_FRACTION[c.effort] || 0.6));
+      $('#mpEffort').textContent = effort ? EFFORT_LABEL[effort] || effort : '';
+      $('#mpRing').hidden = !effort;
+      $('#mpRing').querySelector('.ring-fg').style.strokeDashoffset = 44 * (1 - (EFFORT_FRACTION[effort] || 0.6));
     }
     $('#btnStopHead').hidden = !c.running;
     $('#drawerTitle').textContent = isGroup ? 'Group info' : 'Agent info';
@@ -670,14 +691,20 @@
   function renderPopover() {
     const c = chats.get(activeId);
     if (!c) return;
-    $('#popModels').innerHTML = Object.entries(meta.models).map(([id, name]) => `
-      <button class="pop-model ${id === c.model ? 'sel' : ''}" data-model="${id}">
-        <span><span>${esc(name)}</span><small>${esc(MODEL_NOTES[id] || id)}</small></span>
+    const prov = providerOf(c);
+    $('#popModels').innerHTML = `<div class="pop-label" style="padding-top:0">${esc(meta.providers?.[prov]?.name || prov)}</div>` +
+      modelsFor(prov).map((m) => `
+      <button class="pop-model ${m.id === c.model ? 'sel' : ''}" data-model="${esc(m.id)}">
+        <span><span>${esc(m.name)}</span><small>${esc(MODEL_NOTES[m.id] || m.id)}</small></span>
         <span class="check">✓</span>
       </button>`).join('');
-    const selIdx = meta.efforts.indexOf(c.effort);
-    $('#popEfforts').innerHTML = meta.efforts.map((e, i) =>
-      `<button class="effort-btn ${i < selIdx ? 'on' : ''} ${e === c.effort ? 'sel' : ''}" data-effort="${e}">${EFFORT_LABEL[e]}</button>`).join('');
+    const efforts = effortsFor(c);
+    const current = efforts.includes(c.effort) ? c.effort : (efforts.includes('medium') ? 'medium' : efforts[0]);
+    const selIdx = efforts.indexOf(current);
+    $('#popEfforts').style.gridTemplateColumns = `repeat(${Math.max(efforts.length, 1)}, 1fr)`;
+    $('#popEfforts').innerHTML = efforts.length
+      ? efforts.map((e, i) => `<button class="effort-btn ${i < selIdx ? 'on' : ''} ${e === current ? 'sel' : ''}" data-effort="${e}">${EFFORT_LABEL[e]}</button>`).join('')
+      : '<span class="pop-hint" style="padding:0">This model has a fixed thinking level.</span>';
   }
   pop.onclick = async (e) => {
     e.stopPropagation();
@@ -702,20 +729,32 @@
   function agentSettingsHtml(c) {
     const opt = (list, sel, label = (x) => x) => list.map((v) => `<option value="${v}" ${v === sel ? 'selected' : ''}>${esc(label(v))}</option>`).join('');
     const drives = (meta.drives || []).join(' ');
+    const prov = providerOf(c);
+    const isAgy = prov === 'antigravity';
+    const efforts = effortsFor(c);
+    const providerOpts = Object.entries(meta.providers || { claude: { name: 'Claude Code', available: true } }).map(([id, p]) =>
+      `<option value="${id}" ${id === prov ? 'selected' : ''} ${p.available ? '' : 'disabled'}>${esc(p.name)}${p.available ? '' : ' (not installed)'}</option>`).join('');
     return `
+      <label class="field"><span>Provider</span>
+        <select name="provider">${providerOpts}</select>
+        <small>${isAgy ? 'Runs Google Antigravity’s agent (<code>agy</code>) with your Google account.' : 'Runs Claude Code (<code>claude</code>) with your Claude plan.'}</small></label>
       <label class="field"><span>Model</span>
-        <select name="model">${opt(Object.keys(meta.models), c.model, modelName)}</select></label>
+        <select name="model">${opt(modelsFor(prov).map((m) => m.id), c.model, modelName)}</select></label>
       <label class="field"><span>Effort</span>
-        <select name="effort">${opt(meta.efforts, c.effort, (e) => EFFORT_LABEL[e])}</select></label>
+        ${efforts.length
+          ? `<select name="effort">${opt(efforts, efforts.includes(c.effort) ? c.effort : (efforts.includes('medium') ? 'medium' : efforts[0]), (e) => EFFORT_LABEL[e])}</select>`
+          : '<select disabled><option>Fixed for this model</option></select>'}</label>
       <div class="field"><span>Working folder</span>
         <div class="inline"><input name="cwd" value="${esc(c.cwd)}" placeholder="${esc(meta.home)}" spellcheck="false"><button type="button" data-browse="cwd">Browse…</button></div>
-        <small>Where the agent starts, like running <code>claude</code> in this folder.</small></div>
+        <small>Where the agent starts, like running <code>${isAgy ? 'agy' : 'claude'}</code> in this folder.</small></div>
       <label class="switch"><input type="checkbox" name="fullAccess" ${c.fullAccess !== false ? 'checked' : ''}>
         <span><b>Full PC access</b><small class="muted" style="text-align:left;display:block">Lets the agent read and edit files on every drive (${esc(drives)}), not just its folder.</small></span></label>
       <label class="field"><span>Permissions</span>
         <select name="permissionMode">${opt(meta.permissionModes, c.permissionMode, (p) => PERMISSION_INFO[p] || p)}</select>
         <small class="${c.permissionMode === 'bypassPermissions' ? 'warn' : ''}">${c.permissionMode === 'bypassPermissions'
           ? 'Bypass lets the agent run any command without checks.' + (c.fullAccess !== false ? ' Combined with full PC access it can change anything on this computer.' : '')
+          : (c.permissionMode === 'smart' || c.permissionMode === 'ask') && isAgy
+            ? 'Antigravity can’t ask mid-task, so ClaudeChat checks every command it wants to run: safe ones run, risky ones wait for your Allow/Deny. File edits inside its folders happen directly.'
           : c.permissionMode === 'smart' || c.permissionMode === 'ask'
             ? 'Risky means deleting files, editing outside the working folder, system or registry changes, git push, admin rights, secrets and the like. The agent pauses and you get Allow/Deny in the chat.'
             : 'This mode never asks you. Pick “Ask when risky” to approve dangerous actions yourself.'}</small></label>
@@ -800,11 +839,14 @@
     const f = e.target;
     if (!f.name) return;
     let patch;
+    if (f.name === 'provider') {
+      if (!confirm(`Switch this agent to ${meta.providers[f.value]?.name || f.value}? It starts a fresh conversation (it won't remember this chat's earlier messages).`)) { renderDrawer(); return; }
+    }
     if (f.name === 'member') patch = { members: [...$('#infoForm').querySelectorAll('[name=member]:checked')].map((x) => x.value) };
     else if (f.type === 'checkbox') patch = { [f.name]: f.checked };
     else patch = { [f.name]: f.value };
     await updateChat(activeId, patch);
-    if (['permissionMode', 'fullAccess', 'member'].includes(f.name)) renderDrawer();
+    if (['permissionMode', 'fullAccess', 'member', 'provider', 'model'].includes(f.name)) renderDrawer();
   });
   $('#infoForm').addEventListener('submit', (e) => e.preventDefault());
   $('#infoForm').addEventListener('click', async (e) => {
@@ -833,13 +875,33 @@
   let newAvatar = null;
   function openNew() {
     newAvatar = meta.avatars[agents().length % meta.avatars.length];
-    const defaults = { model: 'claude-opus-5-5', effort: 'high', permissionMode: 'smart', fullAccess: true, cwd: meta.home, systemPrompt: '' };
+    const defaults = { provider: 'claude', model: 'claude-opus-5-5', effort: 'high', permissionMode: 'smart', fullAccess: true, cwd: meta.home, systemPrompt: '' };
     $('#newAvatars').innerHTML = meta.avatars.map((a) => `<button type="button" data-a="${a}" class="${a === newAvatar ? 'sel' : ''}">${a}</button>`).join('');
-    $('#newSettings').innerHTML = `
-      <label class="field"><span>Name</span><input name="name" required maxlength="60" placeholder="e.g. Frontend dev" autofocus></label>
-      ${agentSettingsHtml(defaults)}`;
+    renderNewSettings(defaults, '');
     newDialog.showModal();
   }
+  function renderNewSettings(values, name) {
+    $('#newSettings').innerHTML = `
+      <label class="field"><span>Name</span><input name="name" required maxlength="60" placeholder="e.g. Frontend dev" value="${esc(name)}" autofocus></label>
+      ${agentSettingsHtml(values)}`;
+  }
+  // Picking a provider or model in the new-agent form refreshes the model and effort lists.
+  $('#newSettings').addEventListener('change', (e) => {
+    if (e.target.name !== 'provider' && e.target.name !== 'model') return;
+    const form = $('#newForm');
+    const v = Object.fromEntries(new FormData(form));
+    v.fullAccess = form.querySelector('[name=fullAccess]').checked;
+    if (e.target.name === 'provider') {
+      const first = modelsFor(v.provider)[0];
+      v.model = first?.id;
+      v.effort = v.provider === 'antigravity' ? 'medium' : 'high';
+      if (v.provider === 'antigravity' && newAvatar === meta.avatars[agents().length % meta.avatars.length]) {
+        newAvatar = '✨';
+        $('#newAvatars').querySelectorAll('button').forEach((x) => x.classList.toggle('sel', x.dataset.a === newAvatar));
+      }
+    }
+    renderNewSettings(v, v.name || '');
+  });
   $('#btnNew').onclick = $('#btnNewEmpty').onclick = openNew;
   $('#newAvatars').onclick = (e) => {
     const b = e.target.closest('[data-a]');
@@ -1016,9 +1078,9 @@
     const sp = usage?.spend;
     $('#ucSpend').innerHTML = sp ? `
       <div class="sp-tot"><span>Today ${money(sp.today)}</span><span>7 days ${money(sp.week)}</span></div>
-      ${usage.agents.filter((a) => a.total > 0).slice(0, 8).map((a) => `
-        <div class="sp-row"><span>${esc(a.avatar)}</span><span>${esc(a.name)}</span><span>${money(a.today)} today · ${money(a.total)}</span></div>`).join('') || '<div class="sp-row"><span></span><span>No activity yet</span><span></span></div>'}
-      <div class="uc-foot">Estimated API-equivalent cost reported by Claude Code. On a Pro/Max plan your agents count against the limits above instead.</div>` : '';
+      ${usage.agents.filter((a) => a.total > 0 || a.tokens > 0).slice(0, 8).map((a) => `
+        <div class="sp-row"><span>${esc(a.avatar)}</span><span>${esc(a.name)}</span><span>${a.provider === 'antigravity' ? `${tokenCount(a.tokens)} tokens` : `${money(a.today)} today · ${money(a.total)}`}</span></div>`).join('') || '<div class="sp-row"><span></span><span>No activity yet</span><span></span></div>'}
+      <div class="uc-foot">Estimated API-equivalent cost reported by Claude Code. On a Pro/Max plan your agents count against the limits above instead. Antigravity agents show tokens used, which count against your Google plan, not the limits above.</div>` : '';
   }
 
   $('#usageMini').onclick = (e) => {
