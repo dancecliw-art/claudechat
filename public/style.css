@@ -1,4 +1,6 @@
-/* ClaudeChat — WhatsApp-inspired theme, dark by default with a light variant. */
+/* ClaudeChat — WhatsApp-inspired look, dark by default. Other themes (light, Discord, Dracula,
+   Nord, Midnight, Sakura, Terminal) only swap the color tokens below; Discord also changes the
+   message layout (see the end of this file). */
 :root {
   --bg: #0b141a;
   --panel: #111b21;
@@ -51,6 +53,164 @@
   color-scheme: light;
 }
 
+:root[data-theme="discord"] {
+  --bg: #1e1f22;
+  --panel: #2b2d31;
+  --panel-2: #232428;
+  --hover: #35373c;
+  --active: #404249;
+  --border: #1f2023;
+  --text: #dbdee1;
+  --text-2: #949ba4;
+  --accent: #5865f2;
+  --accent-text: #ffffff;
+  --out: transparent;
+  --in: transparent;
+  --tick-read: #00a8fc;
+  --sys: #2b2d31;
+  --sys-text: #f0b232;
+  --tool-bg: rgba(0, 0, 0, 0.25);
+  --code-bg: #1e1f22;
+  --wall: #313338;
+  --doodle: transparent;
+  --unread: #f23f43;
+  --danger: #f23f43;
+  --pill-model: #00a8fc;
+  --shadow: 0 8px 16px rgba(0, 0, 0, 0.24);
+  color-scheme: dark;
+}
+:root[data-theme="dracula"] {
+  --bg: #191a21;
+  --panel: #21222c;
+  --panel-2: #282a36;
+  --hover: #343746;
+  --active: #44475a;
+  --border: #191a21;
+  --text: #f8f8f2;
+  --text-2: #8b92b8;
+  --accent: #bd93f9;
+  --accent-text: #191a21;
+  --out: #44475a;
+  --in: #282a36;
+  --tick-read: #8be9fd;
+  --sys: #282a36;
+  --sys-text: #f1fa8c;
+  --tool-bg: rgba(0, 0, 0, 0.25);
+  --code-bg: rgba(0, 0, 0, 0.3);
+  --wall: #1e1f29;
+  --doodle: rgba(189, 147, 249, 0.06);
+  --unread: #50fa7b;
+  --danger: #ff5555;
+  --pill-model: #ff79c6;
+  --shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
+}
+:root[data-theme="nord"] {
+  --bg: #242933;
+  --panel: #2e3440;
+  --panel-2: #3b4252;
+  --hover: #434c5e;
+  --active: #434c5e;
+  --border: #3b4252;
+  --text: #eceff4;
+  --text-2: #a3acbd;
+  --accent: #88c0d0;
+  --accent-text: #2e3440;
+  --out: #4c566a;
+  --in: #3b4252;
+  --tick-read: #81a1c1;
+  --sys: #3b4252;
+  --sys-text: #ebcb8b;
+  --tool-bg: rgba(0, 0, 0, 0.18);
+  --code-bg: rgba(0, 0, 0, 0.22);
+  --wall: #2a303b;
+  --doodle: rgba(236, 239, 244, 0.04);
+  --unread: #a3be8c;
+  --danger: #bf616a;
+  --pill-model: #8fbcbb;
+  --shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+  color-scheme: dark;
+}
+:root[data-theme="midnight"] {
+  --bg: #000000;
+  --panel: #000000;
+  --panel-2: #0d0d0f;
+  --hover: #17171a;
+  --active: #1d1d21;
+  --border: #1a1a1d;
+  --text: #f2f2f2;
+  --text-2: #8a8a93;
+  --accent: #3d8bfd;
+  --accent-text: #ffffff;
+  --out: #0f3a73;
+  --in: #16161a;
+  --tick-read: #6cb2ff;
+  --sys: #111114;
+  --sys-text: #ffc861;
+  --tool-bg: rgba(255, 255, 255, 0.04);
+  --code-bg: rgba(255, 255, 255, 0.06);
+  --wall: #000000;
+  --doodle: rgba(255, 255, 255, 0.03);
+  --unread: #3d8bfd;
+  --danger: #ff4d5e;
+  --pill-model: #6cb2ff;
+  --shadow: 0 2px 14px rgba(0, 0, 0, 0.8);
+  color-scheme: dark;
+}
+:root[data-theme="sakura"] {
+  --bg: #f6e4ea;
+  --panel: #fffafc;
+  --panel-2: #fcebf1;
+  --hover: #fbe1ea;
+  --active: #f9d9e4;
+  --border: #f3d7e1;
+  --text: #3b2530;
+  --text-2: #8c6676;
+  --accent: #d6457a;
+  --accent-text: #ffffff;
+  --out: #ffd6e5;
+  --in: #ffffff;
+  --tick-read: #d6457a;
+  --sys: #fff2c9;
+  --sys-text: #7a5c3a;
+  --tool-bg: rgba(214, 69, 122, 0.06);
+  --code-bg: rgba(214, 69, 122, 0.08);
+  --wall: #fbeef3;
+  --doodle: rgba(214, 69, 122, 0.08);
+  --unread: #d6457a;
+  --danger: #d93a3a;
+  --pill-model: #b03566;
+  --shadow: 0 2px 12px rgba(120, 40, 70, 0.14);
+  color-scheme: light;
+}
+:root[data-theme="terminal"] {
+  --bg: #050805;
+  --panel: #0a0f0a;
+  --panel-2: #0f160f;
+  --hover: #142014;
+  --active: #183018;
+  --border: #1a2a1a;
+  --text: #b8f5b8;
+  --text-2: #5fa35f;
+  --accent: #33ff66;
+  --accent-text: #031203;
+  --out: #0f2a14;
+  --in: #0d150d;
+  --tick-read: #33ff66;
+  --sys: #0d150d;
+  --sys-text: #ffd84d;
+  --tool-bg: rgba(51, 255, 102, 0.04);
+  --code-bg: rgba(51, 255, 102, 0.06);
+  --wall: #050805;
+  --doodle: rgba(51, 255, 102, 0.05);
+  --unread: #33ff66;
+  --danger: #ff5c5c;
+  --pill-model: #33ff66;
+  --shadow: 0 0 12px rgba(51, 255, 102, 0.12);
+  color-scheme: dark;
+}
+:root[data-theme="terminal"] body { font-family: Consolas, "Cascadia Mono", Menlo, monospace; font-size: 13.5px; }
+
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body {
@@ -95,6 +255,13 @@ svg { fill: currentColor; }
   background: var(--accent); color: var(--accent-text); font-size: 20px;
 }
 .head-actions { display: flex; gap: 4px; }
+/* The sidebar header holds six buttons: on narrow windows they tighten and the name gives way. */
+.side-head { min-width: 0; }
+.side-head .brand { min-width: 0; }
+.side-head .brand span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-head .brand-logo { flex: none; }
+.side-head .head-actions { flex: none; gap: 0; }
+.side-head .icon-btn { width: 36px; height: 36px; }
 .icon-btn { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; color: var(--text-2); flex: none; }
 .icon-btn:hover { background: var(--hover); }
 .icon-btn svg { width: 22px; height: 22px; }
@@ -325,6 +492,45 @@ dialog .settings { padding: 8px 20px; }
 .toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); background: var(--panel-2); color: var(--text); padding: 10px 18px; border-radius: 8px; box-shadow: var(--shadow); z-index: 100; max-width: calc(100vw - 32px); }
 
 /* ---------- Narrow screens ---------- */
+/* ---- theme picker ---- */
+.head-actions { position: relative; }
+.theme-pop { width: 230px; padding: 6px; }
+.theme-opt { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 8px; border-radius: 6px; text-align: left; }
+.theme-opt:hover { background: var(--hover); }
+.theme-opt .swatch { display: flex; flex: none; border-radius: 50%; overflow: hidden; width: 22px; height: 22px; box-shadow: inset 0 0 0 1px rgba(127, 127, 127, 0.35); }
+.theme-opt .swatch i { flex: 1; }
+.theme-opt .check { margin-left: auto; color: var(--accent); visibility: hidden; }
+.theme-opt.sel .check { visibility: visible; }
+
+/* ---- Discord theme: flat, left-aligned messages like a Discord channel ---- */
+:root[data-theme="discord"] body { font-family: "gg sans", "Noto Sans", "Helvetica Neue", "Segoe UI", system-ui, sans-serif; }
+[data-theme="discord"] .messages { padding: 12px 16px 10px; gap: 0; }
+[data-theme="discord"] .msg, [data-theme="discord"] .msg.out { align-self: stretch; max-width: none; border-radius: 4px; }
+[data-theme="discord"] .msg:hover { background: rgba(2, 2, 2, 0.06); }
+[data-theme="discord"] .msg + .msg.first { margin-top: 14px; }
+[data-theme="discord"] .bubble { box-shadow: none; padding: 2px 8px; border-radius: 0; width: 100%; }
+[data-theme="discord"] .msg.first .bubble::before { display: none; }
+[data-theme="discord"] .msg.first.out .bubble::before {
+  display: block; content: "You"; position: static; width: auto; height: auto; clip-path: none; background: none;
+  font-weight: 600; color: var(--text); font-size: 14.5px; margin-bottom: 2px;
+}
+[data-theme="discord"] .sender { font-size: 14.5px; }
+[data-theme="discord"] .stamp { float: none; display: inline-flex; margin: 0 0 0 8px; top: 0; opacity: 0.8; }
+[data-theme="discord"] .msg-actions, [data-theme="discord"] .msg.out .msg-actions, [data-theme="discord"] .msg.in .msg-actions { left: auto; right: 12px; top: -14px; }
+[data-theme="discord"] .msg-actions button { border-radius: 6px; background: var(--panel); }
+[data-theme="discord"] .tool, [data-theme="discord"] .tool-run { margin-left: 8px; }
+[data-theme="discord"] .tool details, [data-theme="discord"] .tool-run { background: var(--panel); box-shadow: none; border: 1px solid var(--border); }
+[data-theme="discord"] .day { background: none; box-shadow: none; align-self: stretch; text-align: center; border-bottom: 1px solid #3f4147; border-radius: 0; padding: 0 0 4px; font-size: 12px; font-weight: 600; }
+[data-theme="discord"] .sys { align-self: flex-start; max-width: 100%; text-align: left; background: none; box-shadow: none; padding: 4px 8px; }
+[data-theme="discord"] .mention { color: #c9cdfb; background: rgba(88, 101, 242, 0.3); }
+[data-theme="discord"] .composer-wrap { background: var(--wall); }
+[data-theme="discord"] .input-box { background: #383a40; border-radius: 8px; }
+[data-theme="discord"] .chat-head, [data-theme="discord"] .find-bar { background: var(--wall); border-bottom: 1px solid var(--border); box-shadow: 0 1px 0 rgba(4, 4, 5, 0.2); }
+[data-theme="discord"] .avatar { border-radius: 50%; }
+[data-theme="discord"] .chat-item { margin: 1px 8px; border-radius: 6px; }
+[data-theme="discord"] .chat-item .meta { border-bottom: 0; }
+[data-theme="discord"] .chat-item.active { background: var(--active); }
+
 @media (max-width: 900px) {
   .app { grid-template-columns: 1fr; }
   .app .convo { display: none; }

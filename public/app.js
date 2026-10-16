@@ -52,14 +52,47 @@
   }
 
   // ---------- theme ----------
+  // [id, name, swatch colors (sidebar, chat, accent)]. Colors themselves live in style.css.
+  const THEMES = [
+    ['dark', 'WhatsApp dark', ['#111b21', '#005c4b', '#00a884']],
+    ['light', 'WhatsApp light', ['#ffffff', '#d9fdd3', '#008069']],
+    ['discord', 'Discord', ['#2b2d31', '#313338', '#5865f2']],
+    ['dracula', 'Dracula', ['#21222c', '#44475a', '#bd93f9']],
+    ['nord', 'Nord', ['#2e3440', '#4c566a', '#88c0d0']],
+    ['midnight', 'Midnight (OLED black)', ['#000000', '#0f3a73', '#3d8bfd']],
+    ['sakura', 'Sakura', ['#fffafc', '#ffd6e5', '#d6457a']],
+    ['terminal', 'Terminal', ['#050805', '#0f2a14', '#33ff66']],
+  ];
+  function applyTheme(id) {
+    if (!THEMES.some((t) => t[0] === id)) id = 'dark';
+    document.documentElement.dataset.theme = id;
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', THEMES.find((t) => t[0] === id)[2][2]);
+  }
   const savedTheme = load('cc-theme', null);
-  if (savedTheme) document.documentElement.dataset.theme = savedTheme;
-  else if (matchMedia('(prefers-color-scheme: light)').matches) document.documentElement.dataset.theme = 'light';
-  $('#btnTheme').onclick = () => {
-    const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
-    document.documentElement.dataset.theme = next;
-    store('cc-theme', next);
+  applyTheme(savedTheme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
+  function renderThemes() {
+    const cur = document.documentElement.dataset.theme;
+    $('#themePop').innerHTML = '<div class="pop-label" style="padding-top:2px">Theme</div>' + THEMES.map(([id, name, sw]) => `
+      <button type="button" class="theme-opt ${id === cur ? 'sel' : ''}" data-theme-id="${id}">
+        <span class="swatch">${sw.map((c) => `<i style="background:${c}"></i>`).join('')}</span>${name}<span class="check">✓</span>
+      </button>`).join('');
+  }
+  $('#btnTheme').onclick = (e) => {
+    e.stopPropagation();
+    const tp = $('#themePop');
+    tp.hidden = !tp.hidden;
+    if (!tp.hidden) renderThemes();
   };
+  $('#themePop').onclick = (e) => {
+    e.stopPropagation();
+    const b = e.target.closest('[data-theme-id]');
+    if (!b) return;
+    applyTheme(b.dataset.themeId);
+    store('cc-theme', b.dataset.themeId);
+    renderThemes();
+  };
+  document.addEventListener('click', () => { $('#themePop').hidden = true; });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $('#themePop').hidden = true; });
 
   // ---------- helpers ----------
   async function api(method, path, body) {
