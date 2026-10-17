@@ -468,7 +468,7 @@ function onControlRequest(chat, run, ev) {
   const allow = () => send(run, { type: 'control_response', response: { subtype: 'success', request_id: ev.request_id, response: { behavior: 'allow', updatedInput: req.input } } });
   const a = assess(req.tool_name, req.input, run.cwd, os.homedir());
   const mustAsk = agent.permissionMode === 'ask' || a.risky;
-  const remembered = (agent.allowRules || []).includes(a.ruleKey);
+  const remembered = isRemembered(agent, a);
   console.log(`[control] ${agent.name}: ${req.tool_name} ${a.summary.slice(0, 80)} -> ${mustAsk && !remembered ? 'ASK' : 'allow'}${a.reasons.length ? ' (' + a.reasons.join('; ') + ')' : ''}`);
   if (!mustAsk || remembered) return allow();
 
@@ -483,18 +483,23 @@ function onControlRequest(chat, run, ev) {
       summary: a.summary,
       reasons: a.reasons.length ? a.reasons : ['This agent asks before every change'],
       agentName: agent.name,
+      noAlways: a.alwaysAsk || undefined,
       status: 'pending',
     },
   });
-  approvals.set(id, { chat, run, agent, requestId: ev.request_id, input: req.input, ruleKey: a.ruleKey, message });
+  approvals.set(id, { chat, run, agent, requestId: ev.request_id, input: req.input, ruleKey: a.ruleKey, alwaysAsk: a.alwaysAsk, message });
   run.pending.add(id);
   status(chat, run, 'waiting for your approval');
   broadcast({ type: 'chat', chat: summary(chat) });
 }
 
+// "Always allow" rules never cover actions danger.js marks alwaysAsk (like video uploads).
+const isRemembered = (agent, a) => !a.alwaysAsk && (agent.allowRules || []).includes(a.ruleKey);
+
 function decideApproval(id, decision, note) {
   const p = approvals.get(id);
   if (!p) return false;
+  if (decision === 'always' && p.alwaysAsk) decision = 'allow';
   approvals.delete(id);
   p.run.pending.delete(id);
   const { chat, run, agent } = p;
@@ -790,11 +795,12 @@ function askApproval(chat, agent, from, tool, input, a) {
         id, tool, input, summary: a.summary,
         reasons: a.reasons.length ? a.reasons : ['This agent asks before every command'],
         agentName: agent.name,
+        noAlways: a.alwaysAsk || undefined,
         status: 'pending',
       },
     });
     const run = { who: from?.name, pending: new Set([id]) };
-    approvals.set(id, { chat, run, agent, ruleKey: a.ruleKey, message, resolve });
+    approvals.set(id, { chat, run, agent, ruleKey: a.ruleKey, alwaysAsk: a.alwaysAsk, message, resolve });
     status(chat, run, 'waiting for your approval');
     broadcast({ type: 'chat', chat: summary(chat) });
   });
@@ -849,7 +855,7 @@ async function handleBlocked(chat, agent, from, b, cwd) {
       return { text: `Command: ${cmd}\nNot run: this agent is in plan (read-only) mode.` };
     }
     const a = assess(SHELL_TOOL, { command: cmd }, cwd, os.homedir());
-    const remembered = (agent.allowRules || []).includes(a.ruleKey);
+    const remembered = isRemembered(agent, a);
     const mustAsk = (agent.permissionMode === 'ask' || a.risky) && !remembered;
     console.log(`[agy] ${agent.name}: ${cmd.slice(0, 80)} -> ${mustAsk ? 'ASK' : 'run'}${a.reasons.length ? ' (' + a.reasons.join('; ') + ')' : ''}`);
     if (mustAsk) {
@@ -1165,9 +1171,9 @@ function onCodexRequest(chat, run, method, params, requestId) {
   const a = codex.assessApproval(desc, assess, run.cwd, os.homedir());
   const isCommand = desc.tool !== 'Edit';
   // An approved command Codex retries outside its sandbox asks again; don't ask twice.
-  const remembered = (agent.allowRules || []).includes(a.ruleKey) || (isCommand && run.approvedCommands.has(desc.input.command));
+  const remembered = isRemembered(agent, a) || (isCommand && run.approvedCommands.has(desc.input.command));
   const card = run.items.get(params.itemId)?.msg;
-  if (agent.permissionMode === 'acceptEdits') {
+  if (agent.permissionMode === 'acceptEdits' && !a.alwaysAsk) {
     // Edits go through; risky commands are refused without asking.
     const ok = !isCommand || !a.risky || remembered;
     console.log(`[codex] ${agent.name}: ${a.summary.slice(0, 80)} -> ${ok ? 'accept' : 'decline'} (accept-edits mode)`);
@@ -1189,12 +1195,13 @@ function onCodexRequest(chat, run, method, params, requestId) {
       summary: a.summary,
       reasons: a.reasons.length ? a.reasons : ['This agent asks before every change'],
       agentName: agent.name,
+      noAlways: a.alwaysAsk || undefined,
       status: 'pending',
     },
   });
   if (card) patchMessage(chat, card, { tool: { ...card.tool, result: 'Waiting for your approval…' } });
   approvals.set(id, {
-    chat, run, agent, requestId, ruleKey: a.ruleKey, message,
+    chat, run, agent, requestId, ruleKey: a.ruleKey, alwaysAsk: a.alwaysAsk, message,
     answer: (allowed, note) => {
       if (allowed && isCommand) run.approvedCommands.add(desc.input.command);
       if (card) patchMessage(chat, card, { tool: { ...card.tool, result: allowed ? undefined : 'Not run: you denied it' } });

@@ -31,6 +31,8 @@ const scenario = {
     { say: 'All 12 tests pass.' }, // 4: Beta answers
     { say: 'Here is my plan.' }, // 5: plan-mode agent
     'codex-approve-command.jsonl', // 6: stopped while its approval is pending
+    { command: 'python upload_video.py --file=final.mp4' }, // 7: video upload, "always" given
+    { command: 'python upload_video.py --file=final.mp4' }, // 8: asks again anyway
   ],
 };
 fs.writeFileSync(path.join(TMP, 'scenario.json'), JSON.stringify(scenario));
@@ -171,6 +173,23 @@ test('Stop while an approval is pending ends the turn and expires the card', asy
   assert.strictEqual(card.approval.status, 'expired');
   assert.strictEqual(c.approvals, 0);
   assert.ok(c.messages.some((m) => m.role === 'system' && m.text === 'Stopped.'));
+});
+
+test('a video upload always asks: no Always allow, and old rules do not cover it', async () => {
+  // Even an existing rule for this exact command must not skip the question.
+  await call('PATCH', `/chats/${agent.id}`, { allowRules: ['Bash:python upload_video.py'] });
+  for (const round of [1, 2]) {
+    await call('POST', `/chats/${agent.id}/messages`, { text: `post the video ${round}` });
+    const card = await approve(agent.id, 'always');
+    assert.strictEqual(card.noAlways, true, 'the card has no Always allow button');
+    assert.match(card.reasons[0], /Uploads a video online/);
+    await idle(agent.id);
+  }
+  const c = await call('GET', `/chats/${agent.id}`);
+  const cards = c.messages.filter((m) => m.role === 'approval').slice(-2);
+  assert.deepStrictEqual(cards.map((m) => m.approval.status), ['allowed', 'allowed'], '"always" counts as a one-time allow');
+  assert.deepStrictEqual(c.allowRules, ['Bash:python upload_video.py'], 'no new rule was saved');
+  await call('PATCH', `/chats/${agent.id}`, { allowRules: [] });
 });
 
 test('an agent can be duplicated (same settings, fresh memory) and archived', async () => {

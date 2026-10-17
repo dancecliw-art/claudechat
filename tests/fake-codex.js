@@ -4,8 +4,9 @@
 // FAKE_CODEX_SCENARIO  JSON file: { "turns": [ turn, ... ] }, one turn per turn/start, in order
 //                      across processes. A turn is either a fixture file name (recorded real
 //                      app-server output in tests/fixtures; everything from turn/started on is
-//                      replayed, server requests wait for ClaudeChat's answer) or
-//                      { "say": "text" } for a plain reply.
+//                      replayed, server requests wait for ClaudeChat's answer),
+//                      { "say": "text" } for a plain reply, or { "command": "…" } for one
+//                      command approval request.
 // FAKE_CODEX_STATE     file holding the index of the next turn.
 // FAKE_CODEX_LOG       every message ClaudeChat sends is appended here as a JSON line.
 // FAKE_CODEX_CWD       replaces the recorded working folder (/home/user/project) in replayed events.
@@ -57,12 +58,25 @@ function sayTurn(text, turnId) {
   ];
 }
 
+// A turn where Codex asks to run one command, then says whether it ran.
+function commandTurn(command, turnId) {
+  const item = { type: 'commandExecution', id: `cmd-${turnId}`, command: `/bin/bash -lc '${command}'`, cwd: process.env.FAKE_CODEX_CWD || '/', status: 'inProgress', commandActions: [{ type: 'unknown', command }], aggregatedOutput: null, exitCode: null };
+  return [
+    { method: 'turn/started', params: { threadId, turn: { id: turnId, items: [], status: 'inProgress', error: null } } },
+    { method: 'item/started', params: { threadId, turnId, item } },
+    { id: 0, method: 'item/commandExecution/requestApproval', params: { kind: 'command', threadId, turnId, itemId: item.id, command: item.command, cwd: item.cwd, commandActions: item.commandActions } },
+    { method: 'item/completed', params: { threadId, turnId, item: { ...item, status: 'completed', exitCode: 0, aggregatedOutput: 'uploaded' } } },
+    ...sayTurn('Done.', turnId).slice(1),
+  ];
+}
+
 async function play(turn, turnId) {
   let lines;
   if (typeof turn === 'string') {
     const all = recorded(turn);
     lines = all.slice(all.findIndex((m) => m.method === 'turn/started')).filter((m) => m.method);
-  } else lines = sayTurn(turn.say, turnId);
+  } else if (turn.command) lines = commandTurn(turn.command, turnId);
+  else lines = sayTurn(turn.say, turnId);
   for (const m of lines) {
     if (m.id !== undefined) {
       // A server request: ask ClaudeChat and wait for its decision.

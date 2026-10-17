@@ -467,7 +467,7 @@
           <input class="ap-note" placeholder="Optional: tell it what to do instead (sent if you deny)" maxlength="500">
           <div class="ap-actions">
             <button type="button" class="ap-deny" data-approve="deny" data-aid="${a.id}">Deny</button>
-            <button type="button" class="ap-always" data-approve="always" data-aid="${a.id}" title="Don't ask again for similar actions by this agent">Always allow</button>
+            ${a.noAlways ? '' : `<button type="button" class="ap-always" data-approve="always" data-aid="${a.id}" title="Don't ask again for similar actions by this agent">Always allow</button>`}
             <button type="button" class="ap-allow" data-approve="allow" data-aid="${a.id}">Allow</button>
           </div>` : `<div class="ap-result">${esc(done[1])}${a.note ? `: “${esc(a.note)}”` : ''}</div>`}
       </div>`;

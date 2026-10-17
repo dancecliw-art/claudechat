@@ -118,6 +118,7 @@ Chats are saved in `data/chats.json`, attachments in `data/uploads/`. Set the `P
 - runs `git push`, `reset --hard`, `clean -f` and similar, or publishes packages
 - pipes a downloaded script into a shell (`iwr … | iex`), or kills processes
 - formats disks, shuts down the PC, or installs/uninstalls software
+- **uploads a video to YouTube or TikTok** (upload scripts, `curl`/`Invoke-RestMethod` posting a video file, MCP upload tools). These **always ask**: the card has no "Always allow", and no saved rule skips it. This works in the ask modes (*Ask every time*, *Ask when risky*) and in *Accept edits*. In *Bypass*, and in *Claude decides* / *Codex decides*, the CLI runs commands without asking ClaudeChat, so nothing can be stopped.
 
 **Always allow** remembers the command's first two words (e.g. `git push`), or the folder for file edits. The agent's info panel lists these rules, where you can remove them. Other modes: **Ask every time**, **Claude decides** (Claude Code's auto mode, never asks), **Accept edits**, **Plan**, and **Bypass** (no checks at all).
 
