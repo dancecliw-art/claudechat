@@ -1,10 +1,10 @@
 # ClaudeChat
 
-WhatsApp-style messenger where every chat is a Claude Code agent.
+WhatsApp-style messenger where every chat is a coding agent: Claude Code, OpenAI Codex or Google Antigravity.
 
-> Unofficial community project. Not affiliated with or endorsed by Anthropic or WhatsApp. It drives your own locally installed [Claude Code](https://claude.com/claude-code) CLI, so agent usage counts against your own Claude plan.
+> Unofficial community project. Not affiliated with or endorsed by Anthropic, OpenAI, Google or WhatsApp. It drives your own locally installed CLIs ([Claude Code](https://claude.com/claude-code), [Codex](https://github.com/openai/codex), Antigravity), so agent usage counts against your own plans.
 
-**Features:** one chat per agent, each with its own folder, model and effort · **Claude Code and Google Antigravity (Gemini 3.8 Flash and more) agents side by side** · group chats where agents talk to each other · Codex-style approvals for risky actions · live session and weekly usage meter · broadcast · attachments, voice input and replies · Windows `.exe` with its own app window.
+**Features:** one chat per agent, each with its own folder, model and effort · **Claude Code, OpenAI Codex and Google Antigravity agents side by side** · group chats where agents talk to each other · Codex-style approvals for risky actions · live session and weekly usage meter · broadcast · attachments, voice input and replies · **Ctrl+K chat switcher, search in a chat, starred messages, `/` prompt templates, per-agent stats** · Windows `.exe` with its own app window.
 
 Licensed under the [MIT License](LICENSE).
 
@@ -16,7 +16,7 @@ Double-click `Start ClaudeChat.bat`, or:
 node server.js
 ```
 
-Then open http://localhost:4317. You need Node 18+ and Claude Code (`claude`) installed and logged in. There's nothing to `npm install`.
+Then open http://localhost:4317. You need Node 18+ and Claude Code (`claude`) installed and logged in. Codex (`codex`) and Antigravity (`agy`) are optional extras. There's nothing to `npm install`.
 
 ## Windows app (.exe)
 
@@ -38,7 +38,25 @@ In a group chat (👥), turn on:
 - **⚡ Work at the same time:** everyone who's asked works in parallel instead of waiting their turn.
 - **Shared project folder:** one folder the whole team builds in. Leave it empty to let each agent use its own folder.
 
-Give each agent a role in its **About** field (e.g. "Backend developer: owns the API"). Teammates see the first line of it. Claude Code and Antigravity agents can be in the same team.
+Give each agent a role in its **About** field (e.g. "Backend developer: owns the API"). Teammates see the first line of it. Claude Code, Codex and Antigravity agents can be in the same team.
+
+## OpenAI Codex agents
+
+Install the [Codex CLI](https://github.com/openai/codex) and log in once:
+
+```
+npm install -g @openai/codex
+codex login
+```
+
+Then pick **Provider → Codex (OpenAI)** when creating an agent. ClaudeChat finds `codex` through `CODEX_BIN`, your `PATH`, or npm's global folder (`%APPDATA%\npm` on Windows, where it runs the native `codex.exe` behind the `codex.cmd` shim). It loads the installed CLI's model list at startup (e.g. GPT-6.1-Sol, GPT-5.5), and each model has its own effort levels, including **Ultra** on the bigger ones.
+
+- **How it runs:** each turn starts `codex app-server`, the JSON-RPC interface that Codex's IDE extension and its official SDK use, and opens or resumes the agent's thread. The thread id is stored as the chat's session, so the agent remembers earlier messages. Replies stream in word by word, and commands, file edits, MCP tools and web searches show up as tool cards.
+- **Approvals:** Codex runs in its `workspace-write` sandbox and asks before commands and edits. ClaudeChat answers each request with the same `danger.js` check it uses for Claude Code: safe ones go ahead, risky ones get the usual Allow/Deny card. If you deny with a note, the note is passed to the agent while it's still working. **Always allow** works the same way as for Claude.
+- **Permission modes:** *Ask when risky* and *Ask every time* work as above. *Accept edits* lets file edits through and refuses risky commands without asking. *Codex decides* never asks, and the sandbox keeps writes inside the folder. *Plan* uses a read-only sandbox. *Bypass* turns the sandbox off (`danger-full-access`).
+- **Full PC access:** Codex can always read your whole PC. Edits and commands outside the working folder go through the approval check.
+- **Usage:** Codex agents show tokens used in the usage card and agent info. They count against your ChatGPT plan or API key, not your Claude limits.
+- **Why not `codex exec`?** In `codex exec --json`, approvals are forced off, and a command the sandbox blocks never shows up in the JSON events. That left no way to ask you about it, so ClaudeChat uses `codex app-server` instead.
 
 ## Google Antigravity (Gemini) agents
 
@@ -50,12 +68,33 @@ If the [Antigravity](https://antigravity.google) CLI (`agy`) is installed, pick 
 
 ## How it works
 
-- Each chat runs `claude -p` in its own **working folder**, with that chat's **model**, **effort** and **permission mode**, and resumes its own session, so every agent keeps its memory between messages.
+- Each chat runs its CLI (`claude -p`, `codex app-server` or `agy`) in its own **working folder**, with that chat's **model**, **effort** and **permission mode**, and resumes its own session, so every agent keeps its memory between messages.
 - The pill in the chat header (e.g. `Opus 5.5  High  ◔`) switches model and effort. The ring fills as effort goes up. The change applies from the next message.
-- Tool calls (Bash, Edit, Read…) show up as collapsible cards. Click one to see its input and output.
+- Tool calls (Bash, Edit, Read…) show up as collapsible cards. Click one to see its input and output. Several steps in a row fold into one compact row ("5 steps · Bash, Read, Edit"); click it to expand them.
 - The 📣 button broadcasts one message to several agents at once.
 - Unread badges, a "typing…" status, blue ticks when an agent has answered, a sound when an agent you aren't looking at finishes, and desktop notifications when the tab is in the background.
 - The ⋮ menu has per-agent settings: name, avatar, folder, permissions, custom instructions, pin, new session and delete.
+
+### New in v2.1
+
+- **Drafts:** a half-typed message stays in its chat when you switch away or reload.
+- **Jump to latest:** a ↓ button appears when you scroll up, counting new replies.
+- **Edit & resend** (✎ on your messages) puts the text back in the box to change and send again.
+- **Ask again** (↻ on a reply) resends your last message so the agent has another go.
+- **Read aloud** (🔊 on a reply) speaks it, using the browser's voice. Press again to stop.
+- **Archive chats** from the info panel. They leave the list and wait under the **Archived** filter.
+- **Duplicate agent** makes a copy with the same settings and a fresh memory.
+- **Provider filters:** Claude, Codex and Antigravity chips above the chat list.
+- **Your own templates:** pick “Your templates…” in the `/` menu to save prompts like `/docs`.
+- **Text size:** small, normal or large, in the 🌙 menu.
+- **Keyboard shortcuts:** Ctrl+/ lists them all, and Alt+↑/↓ moves between chats.
+
+- **Ctrl+K quick switcher:** jump to any chat by typing part of its name. ↑↓ and Enter work.
+- **Search in a chat** (🔍 in the header, or Ctrl+F): highlights every match. Enter steps to older matches and Shift+Enter to newer ones.
+- **Starred messages:** hover a message and press ☆. The ★ button in the sidebar lists starred messages from every chat, and clicking one jumps to it.
+- **Prompt templates:** type `/` at the start of a message for `/review`, `/test`, `/explain`, `/fix`, `/commit` and `/plan`. Pick one with Enter or Tab to fill in a ready-made prompt you can still edit.
+- **Themes:** the 🌙 button picks a theme: WhatsApp dark or light, **Claude** and **Claude dark** (like the Claude desktop app: warm colors, flat serif replies in a centered column, a big rounded message box), **Discord** (flat, left-aligned messages like a Discord channel), Dracula, Nord, Midnight (pure black for OLED screens), Sakura and Terminal. Your choice is remembered.
+- **Per-agent stats:** the agent info panel shows the agent's turns, tokens and estimated cost, including its work in groups.
 
 ### New in v2
 
@@ -68,9 +107,9 @@ If the [Antigravity](https://antigravity.google) CLI (`agy`) is installed, pick 
 - **Voice input** 🎤 (Chrome/Edge), **reply/quote** (↩ on hover), copy message, copy buttons on code blocks, mute, and **export chat** to Markdown.
 - **Safety**: the server only accepts requests from its own page on `localhost`, so other websites can't drive your agents.
 
-Chats are saved in `data/chats.json`, attachments in `data/uploads/`. Set `PORT` or `CLAUDE_BIN` env vars to override the defaults.
+Chats are saved in `data/chats.json`, attachments in `data/uploads/`. Set the `PORT`, `CLAUDE_BIN`, `AGY_BIN` or `CODEX_BIN` env vars to override the defaults.
 
-**Permissions: Codex-style approvals.** The default mode is **Ask when risky**. Safe work runs on its own: reading, searching, and edits and commands inside the agent's working folder. When an agent tries something risky, it pauses and a ⚠️ card appears in the chat with **Allow**, **Always allow** and **Deny** (you can add a note telling it what to do instead). The chat list shows "Waiting for your approval", and you get a sound and desktop notification even for muted chats. The checks live in `danger.js`, and an action is risky if it:
+**Permissions: Codex-style approvals.** New agents start in **Ask every time**: every command and file edit waits for your Allow/Deny (reading and searching files doesn't ask). "Use this for all agents" under Permissions in an agent's info panel switches every agent to the same mode. Pick **Ask when risky** to let safe work run on its own: reading, searching, and edits and commands inside the agent's working folder. When an agent tries something risky, it pauses and a ⚠️ card appears in the chat with **Allow**, **Always allow** and **Deny** (you can add a note telling it what to do instead). The chat list shows "Waiting for your approval", and you get a sound and desktop notification even for muted chats. The checks live in `danger.js`, and an action is risky if it:
 
 - deletes files (`rm`, `del`, `Remove-Item`…) or clears data
 - edits a file outside the working folder, or changes files with a command that uses an outside path
@@ -79,7 +118,16 @@ Chats are saved in `data/chats.json`, attachments in `data/uploads/`. Set `PORT`
 - runs `git push`, `reset --hard`, `clean -f` and similar, or publishes packages
 - pipes a downloaded script into a shell (`iwr … | iex`), or kills processes
 - formats disks, shuts down the PC, or installs/uninstalls software
+- **uploads a video to YouTube or TikTok** (upload scripts, `curl`/`Invoke-RestMethod` posting a video file, MCP upload tools). These **always ask**: the card has no "Always allow", and no saved rule skips it. This works in the ask modes (*Ask every time*, *Ask when risky*) and in *Accept edits*. In *Bypass*, and in *Claude decides* / *Codex decides*, the CLI runs commands without asking ClaudeChat, so nothing can be stopped.
 
 **Always allow** remembers the command's first two words (e.g. `git push`), or the folder for file edits. The agent's info panel lists these rules, where you can remove them. Other modes: **Ask every time**, **Claude decides** (Claude Code's auto mode, never asks), **Accept edits**, **Plan**, and **Bypass** (no checks at all).
 
 `data/chats.backup.json` holds a copy of your chats from the last time the server started.
+
+## Tests
+
+```
+npm test
+```
+
+Plain Node scripts, no dependencies. `tests/codex.test.js` checks the Codex protocol code against events recorded from a real `codex app-server` (in `tests/fixtures/`). `tests/codex-server.test.js` starts the server with `tests/fake-codex.js`, which replays those recordings, and drives it over HTTP: approvals, resume, team talk, plan mode, Stop and starring. `tests/build.test.js` checks that the exe bundle parses. None of them need a Codex login.
