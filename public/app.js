@@ -1217,6 +1217,13 @@
         <select name="permissionMode">${opt(meta.permissionModes, c.permissionMode, (p) => permissionInfo(p, prov))}</select>
         <small class="${c.permissionMode === 'bypassPermissions' ? 'warn' : ''}">${c.permissionMode === 'bypassPermissions'
           ? 'Bypass lets the agent run any command without checks.' + (c.fullAccess !== false ? ' Combined with full PC access it can change anything on this computer.' : '')
+          : c.permissionMode === 'ask'
+            ? (isCodex
+              ? 'Every command and file edit Codex asks about waits for your Allow/Deny. Codex still runs simple read-only commands (like ls or cat) without asking.'
+              : isAgy
+                ? 'Every command Antigravity wants to run waits for your Allow/Deny. File edits inside its folders happen directly.'
+                : 'Every command and file edit waits for your Allow/Deny. Reading and searching files doesn’t ask.') +
+              ' “Always allow” on a card skips asking for similar ones.'
           : (c.permissionMode === 'smart' || c.permissionMode === 'ask') && isAgy
             ? 'Antigravity can’t ask mid-task, so ClaudeChat checks every command it wants to run: safe ones run, risky ones wait for your Allow/Deny. File edits inside its folders happen directly.'
           : (c.permissionMode === 'smart' || c.permissionMode === 'ask') && isCodex
@@ -1227,7 +1234,8 @@
             ? 'Codex never asks in this mode. Its sandbox keeps writes inside the working folder.'
           : c.permissionMode === 'smart' || c.permissionMode === 'ask'
             ? 'Risky means deleting files, editing outside the working folder, system or registry changes, git push, admin rights, secrets and the like. The agent pauses and you get Allow/Deny in the chat.'
-            : 'This mode never asks you. Pick “Ask when risky” to approve dangerous actions yourself.'}</small></label>
+            : 'This mode never asks you. Pick “Ask when risky” to approve dangerous actions yourself.'}</small>
+        ${agents().length > 1 && c.id ? '<button type="button" class="link-btn" data-allmode>Use this for all agents</button>' : ''}</label>
       ${(c.allowRules || []).length ? `
       <div class="field"><span>Always allowed</span>
         <div class="rules">${c.allowRules.map((r) => `<span class="rule">${esc(r.replace(':', ' · '))}<button type="button" data-rmrule="${esc(r)}" aria-label="Remove">✕</button></span>`).join('')}</div>
@@ -1347,6 +1355,15 @@
   });
   $('#infoForm').addEventListener('submit', (e) => e.preventDefault());
   $('#infoForm').addEventListener('click', async (e) => {
+    if (e.target.closest('[data-allmode]')) {
+      e.preventDefault();
+      const mode = chats.get(activeId).permissionMode;
+      const others = agents().filter((a) => a.permissionMode !== mode);
+      if (!others.length) return toast('All agents already use this.');
+      if (!confirm(`Set ${others.length} other agent${others.length === 1 ? '' : 's'} to “${permissionInfo(mode, 'claude').split(':')[0]}”?`)) return;
+      for (const a of others) await updateChat(a.id, { permissionMode: mode });
+      return toast('Done. All agents use the same permissions now.');
+    }
     const b = e.target.closest('[data-rmrule]');
     if (!b) return;
     const c = chats.get(activeId);
@@ -1386,7 +1403,7 @@
   let newAvatar = null;
   function openNew() {
     newAvatar = meta.avatars[agents().length % meta.avatars.length];
-    const defaults = { provider: 'claude', model: 'claude-opus-5-5', effort: 'high', permissionMode: 'smart', fullAccess: true, cwd: meta.home, systemPrompt: '' };
+    const defaults = { provider: 'claude', model: 'claude-opus-5-5', effort: 'high', permissionMode: 'ask', fullAccess: true, cwd: meta.home, systemPrompt: '' };
     $('#newAvatars').innerHTML = meta.avatars.map((a) => `<button type="button" data-a="${a}" class="${a === newAvatar ? 'sel' : ''}">${a}</button>`).join('');
     renderNewSettings(defaults, '');
     newDialog.showModal();

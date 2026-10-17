@@ -554,6 +554,8 @@ dialog .settings { padding: 8px 20px; }
 .theme-opt .check { margin-left: auto; color: var(--accent); visibility: hidden; }
 .theme-opt.sel .check { visibility: visible; }
 
+.link-btn { align-self: flex-start; color: var(--accent); font-size: 13px; padding: 4px 0 0; }
+
 /* ---- jump to latest ---- */
 .chat { position: relative; }
 .jump { position: absolute; right: 22px; bottom: 84px; z-index: 15; width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; background: var(--panel-2); color: var(--text-2); box-shadow: var(--shadow); }

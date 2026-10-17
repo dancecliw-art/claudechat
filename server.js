@@ -1584,7 +1584,7 @@ const server = http.createServer(async (req, res) => {
           provider: 'claude',
           model: 'claude-opus-5-5',
           effort: 'high',
-          permissionMode: 'smart',
+          permissionMode: 'ask',
           allowRules: [],
           fullAccess: true,
           cwd: isGroup ? '' : os.homedir(), // groups: '' = each agent works in its own folder

@@ -109,7 +109,7 @@ If the [Antigravity](https://antigravity.google) CLI (`agy`) is installed, pick 
 
 Chats are saved in `data/chats.json`, attachments in `data/uploads/`. Set the `PORT`, `CLAUDE_BIN`, `AGY_BIN` or `CODEX_BIN` env vars to override the defaults.
 
-**Permissions: Codex-style approvals.** The default mode is **Ask when risky**. Safe work runs on its own: reading, searching, and edits and commands inside the agent's working folder. When an agent tries something risky, it pauses and a ⚠️ card appears in the chat with **Allow**, **Always allow** and **Deny** (you can add a note telling it what to do instead). The chat list shows "Waiting for your approval", and you get a sound and desktop notification even for muted chats. The checks live in `danger.js`, and an action is risky if it:
+**Permissions: Codex-style approvals.** New agents start in **Ask every time**: every command and file edit waits for your Allow/Deny (reading and searching files doesn't ask). "Use this for all agents" under Permissions in an agent's info panel switches every agent to the same mode. Pick **Ask when risky** to let safe work run on its own: reading, searching, and edits and commands inside the agent's working folder. When an agent tries something risky, it pauses and a ⚠️ card appears in the chat with **Allow**, **Always allow** and **Deny** (you can add a note telling it what to do instead). The chat list shows "Waiting for your approval", and you get a sound and desktop notification even for muted chats. The checks live in `danger.js`, and an action is risky if it:
 
 - deletes files (`rm`, `del`, `Remove-Item`…) or clears data
 - edits a file outside the working folder, or changes files with a command that uses an outside path
