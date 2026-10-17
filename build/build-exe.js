@@ -1,7 +1,7 @@
 // Builds dist/exe-builder/ClaudeChat.exe: a Node single-executable app (Node runtime +
 // bundled server + embedded web files). Windows x64. Run: node build/build-exe.js
 //
-// Steps: bundle server.js + danger.js -> SEA blob with public/ as assets -> copy node.exe ->
+// Steps: bundle server.js + danger.js + codex.js + youtube.js -> SEA blob with public/ as assets -> copy node.exe ->
 // inject blob (build/inject.cs, compiled with Windows' built-in csc) -> flip the SEA fuse.
 
 const fs = require('fs');
@@ -14,6 +14,25 @@ const ROOT = path.join(__dirname, '..');
 const WORK = path.join(require('os').tmpdir(), 'claudechat-build');
 const FUSE = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2';
 const CSC = path.join(process.env.WINDIR || 'C:\\Windows', 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
+
+// server.js with its local modules inlined: each require('./x') becomes an inline module.
+// Exported so tests can check the bundle on any OS.
+const LOCAL_MODULES = ['danger', 'codex', 'youtube'];
+function bundleSource() {
+  let server = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
+  let head = '';
+  for (const name of LOCAL_MODULES) {
+    const marker = `require('./${name}')`;
+    if (!server.includes(marker)) throw new Error(`server.js no longer contains ${marker}; update the bundler.`);
+    const src = fs.readFileSync(path.join(ROOT, `${name}.js`), 'utf8');
+    if (/require\('\.\//.test(src)) throw new Error(`${name}.js requires a local file; the bundler only inlines server.js's own.`);
+    const v = `__claudechat_${name}`;
+    head += `const ${v} = (() => { const module = { exports: {} }; const exports = module.exports;\n${src}\nreturn module.exports; })();\n`;
+    server = server.split(marker).join(v);
+  }
+  return head + server;
+}
+if (require.main !== module) { module.exports = { bundleSource }; return; }
 
 if (process.platform !== 'win32' || process.arch !== 'x64') {
   console.error(`This build makes a Windows x64 exe and must run on Windows x64 Node (this is ${process.platform}-${process.arch}).`);
@@ -37,14 +56,8 @@ for (const f of ['claudechat.js', 'sea-config.json', 'sea-prep.blob', 'ClaudeCha
   fs.rmSync(path.join(WORK, f), { force: true });
 }
 
-step('Bundling server.js + danger.js');
-const danger = fs.readFileSync(path.join(ROOT, 'danger.js'), 'utf8');
-const server = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
-const marker = "require('./danger')";
-if (!server.includes(marker)) throw new Error(`server.js no longer contains ${marker}; update the bundler.`);
-const bundle =
-  `const __claudechatDanger = (() => { const module = { exports: {} }; const exports = module.exports;\n${danger}\nreturn module.exports; })();\n` +
-  server.replace(marker, '__claudechatDanger');
+step(`Bundling server.js + ${LOCAL_MODULES.map((n) => n + '.js').join(' + ')}`);
+const bundle = bundleSource();
 const bundlePath = path.join(WORK, 'claudechat.js');
 fs.writeFileSync(bundlePath, bundle);
 

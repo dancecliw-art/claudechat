@@ -3,8 +3,8 @@
   const $ = (sel) => document.querySelector(sel);
   const app = $('#app');
 
-  const EFFORT_LABEL = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh', max: 'Max' };
-  const EFFORT_FRACTION = { low: 0.2, medium: 0.4, high: 0.6, xhigh: 0.8, max: 1 };
+  const EFFORT_LABEL = { none: 'None', minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh', max: 'Max', ultra: 'Ultra' };
+  const EFFORT_FRACTION = { none: 0.05, minimal: 0.1, low: 0.2, medium: 0.4, high: 0.6, xhigh: 0.8, max: 0.9, ultra: 1 };
   const MODEL_NOTES = {
     'claude-fable-5-1': 'Most capable · slowest, uses the most',
     'claude-opus-5-5': 'Default · great for coding',
@@ -14,8 +14,16 @@
     'claude-sonnet-4-6': 'Anthropic, via Antigravity',
     'claude-opus-4-6-thinking': 'Anthropic, via Antigravity',
     'gpt-oss-120b': 'Open model, via Antigravity',
+    'gpt-6.1-sol': 'OpenAI · Codex default',
+    'gpt-5.5': 'OpenAI · lighter on usage',
   };
-  const PROVIDER_SHORT = { claude: 'Claude Code', antigravity: 'Antigravity' };
+  const PROVIDER_SHORT = { claude: 'Claude Code', antigravity: 'Antigravity', codex: 'Codex' };
+  // What runs each provider's agents, for the settings hints.
+  const PROVIDER_CLI = {
+    claude: ['claude', 'Runs Claude Code (<code>claude</code>) with your Claude plan.'],
+    antigravity: ['agy', 'Runs Google Antigravity’s agent (<code>agy</code>) with your Google account.'],
+    codex: ['codex', 'Runs OpenAI Codex (<code>codex</code>) with your ChatGPT plan or API key (<code>codex login</code>).'],
+  };
   const PERMISSION_INFO = {
     smart: 'Ask when risky: safe actions run, risky ones wait for your OK (recommended)',
     ask: 'Ask every time: approve each edit and command',
@@ -35,6 +43,7 @@
   let pendingAtts = [];   // [{ id, name, type, preview, uploaded?: {path,url,...} }]
   let replyTo = null;     // { id, name, text, color }
   let usage = null;
+  let drafts = load('cc-drafts', {}); // unsent text per chat
 
   function load(key, fallback) {
     try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
@@ -44,14 +53,59 @@
   }
 
   // ---------- theme ----------
+  // [id, name, swatch colors (sidebar, chat, accent)]. Colors themselves live in style.css.
+  const THEMES = [
+    ['dark', 'WhatsApp dark', ['#111b21', '#005c4b', '#00a884']],
+    ['light', 'WhatsApp light', ['#ffffff', '#d9fdd3', '#008069']],
+    ['claude', 'Claude', ['#f5f4ee', '#faf9f5', '#c96442']],
+    ['claude-dark', 'Claude dark', ['#1f1e1d', '#262624', '#d97757']],
+    ['discord', 'Discord', ['#2b2d31', '#313338', '#5865f2']],
+    ['dracula', 'Dracula', ['#21222c', '#44475a', '#bd93f9']],
+    ['nord', 'Nord', ['#2e3440', '#4c566a', '#88c0d0']],
+    ['midnight', 'Midnight (OLED black)', ['#000000', '#0f3a73', '#3d8bfd']],
+    ['sakura', 'Sakura', ['#fffafc', '#ffd6e5', '#d6457a']],
+    ['terminal', 'Terminal', ['#050805', '#0f2a14', '#33ff66']],
+  ];
+  function applyTheme(id) {
+    if (!THEMES.some((t) => t[0] === id)) id = 'dark';
+    document.documentElement.dataset.theme = id;
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', THEMES.find((t) => t[0] === id)[2][2]);
+  }
   const savedTheme = load('cc-theme', null);
-  if (savedTheme) document.documentElement.dataset.theme = savedTheme;
-  else if (matchMedia('(prefers-color-scheme: light)').matches) document.documentElement.dataset.theme = 'light';
-  $('#btnTheme').onclick = () => {
-    const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
-    document.documentElement.dataset.theme = next;
-    store('cc-theme', next);
+  applyTheme(savedTheme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
+  const SIZES = [['small', 'A', 'Small text'], ['normal', 'A', 'Normal text'], ['large', 'A', 'Large text']];
+  function applySize(sz) { document.documentElement.dataset.size = SIZES.some((x) => x[0] === sz) ? sz : 'normal'; }
+  applySize(load('cc-size', 'normal'));
+  function renderThemes() {
+    const cur = document.documentElement.dataset.theme;
+    const size = document.documentElement.dataset.size;
+    $('#themePop').innerHTML = '<div class="pop-label" style="padding-top:2px">Theme</div>' + THEMES.map(([id, name, sw]) => `
+      <button type="button" class="theme-opt ${id === cur ? 'sel' : ''}" data-theme-id="${id}">
+        <span class="swatch">${sw.map((c) => `<i style="background:${c}"></i>`).join('')}</span>${name}<span class="check">✓</span>
+      </button>`).join('') +
+      `<div class="pop-label">Text size</div><div class="size-row">${SIZES.map(([id, label, title]) =>
+        `<button type="button" class="size-${id} ${id === size ? 'sel' : ''}" data-size-id="${id}" title="${title}">${label}</button>`).join('')}</div>` +
+      '<div class="pop-label">Connections</div><button type="button" class="theme-opt" data-open-yt><span class="swatch"><i style="background:#ff0033"></i></span>YouTube…</button>';
+  }
+  $('#btnTheme').onclick = (e) => {
+    e.stopPropagation();
+    const tp = $('#themePop');
+    tp.hidden = !tp.hidden;
+    if (!tp.hidden) renderThemes();
   };
+  $('#themePop').onclick = (e) => {
+    e.stopPropagation();
+    if (e.target.closest('[data-open-yt]')) { $('#themePop').hidden = true; return openYouTube(); }
+    const sz = e.target.closest('[data-size-id]');
+    if (sz) { applySize(sz.dataset.sizeId); store('cc-size', sz.dataset.sizeId); return renderThemes(); }
+    const b = e.target.closest('[data-theme-id]');
+    if (!b) return;
+    applyTheme(b.dataset.themeId);
+    store('cc-theme', b.dataset.themeId);
+    renderThemes();
+  };
+  document.addEventListener('click', () => { $('#themePop').hidden = true; });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $('#themePop').hidden = true; });
 
   // ---------- helpers ----------
   async function api(method, path, body) {
@@ -136,6 +190,18 @@
   const modelsFor = (prov) => meta?.providers?.[prov]?.models || [];
   const modelInfo = (prov, id) => modelsFor(prov).find((m) => m.id === id);
   const effortsFor = (c) => modelInfo(providerOf(c), c.model)?.efforts || [];
+  // The effort an agent actually runs with: its own if the model has it, else the model's default.
+  function effortOf(c) {
+    const efforts = effortsFor(c);
+    if (efforts.includes(c.effort)) return c.effort;
+    const def = modelInfo(providerOf(c), c.model)?.defaultEffort;
+    if (efforts.includes(def)) return def;
+    return efforts.includes('medium') ? 'medium' : efforts[0];
+  }
+  function permissionInfo(p, prov) {
+    if (prov === 'codex' && p === 'auto') return 'Codex decides: works in its sandbox, never asks';
+    return PERMISSION_INFO[p] || p;
+  }
   function modelName(id) {
     for (const p of Object.values(meta?.providers || {})) {
       const m = p.models.find((x) => x.id === id);
@@ -168,6 +234,9 @@
       if (filter === 'unread' && !unread[c.id]) return false;
       if (filter === 'pinned' && !c.pinned) return false;
       if (filter === 'groups' && c.type !== 'group') return false;
+      // Archived chats only show under "Archived"; provider chips show that provider's agents.
+      if ((filter === 'archived') !== !!c.archived) return false;
+      if (filter.startsWith('p:') && (c.type === 'group' || providerOf(c) !== filter.slice(2))) return false;
       if (q && !(c.name.toLowerCase().includes(q) || (c.lastMessage?.text || '').toLowerCase().includes(q))) return false;
       return true;
     });
@@ -223,8 +292,24 @@
   };
 
   // ---------- conversation ----------
-  async function openChat(id) {
-    if (activeId !== id) { clearReply(); clearAtts(); }
+  function gotoMessage(id, smooth = true) {
+    const node = $('#messages').querySelector(`[data-id="${CSS.escape(id)}"]`);
+    if (!node) return false;
+    node.scrollIntoView({ block: 'center', behavior: smooth ? 'smooth' : 'auto' });
+    node.classList.add('flash');
+    setTimeout(() => node.classList.remove('flash'), 1300);
+    return true;
+  }
+
+  async function openChat(id, gotoId) {
+    if (activeId !== id) {
+      clearReply();
+      clearAtts();
+      input.value = drafts[id] || '';
+      autosize();
+      syncSendButton();
+      hideJump();
+    }
     activeId = id;
     unread[id] = 0;
     store('cc-unread', unread);
@@ -243,14 +328,17 @@
       renderHeader();
       renderMessages();
       if (!$('#drawer').hidden) renderDrawer();
+      if (!$('#findBar').hidden) runFind();
+      if (gotoId && !gotoMessage(gotoId, false)) toast('That message is no longer in this chat.');
     } catch (e) {
       toast(e.message);
     }
-    if (matchMedia('(min-width: 901px)').matches) $('#input').focus();
+    if (matchMedia('(min-width: 901px)').matches && $('#findBar').hidden) $('#input').focus();
   }
 
   function closeChat() {
     activeId = null;
+    closeFind();
     app.classList.remove('in-chat');
     $('#chat').hidden = true;
     $('#empty').hidden = false;
@@ -281,8 +369,7 @@
     }
     $('#modelWrap').hidden = isGroup;
     if (!isGroup) {
-      const efforts = effortsFor(c);
-      const effort = efforts.includes(c.effort) ? c.effort : (efforts.includes('medium') ? 'medium' : efforts[0]);
+      const effort = effortOf(c);
       $('#mpModel').textContent = modelName(c.model);
       $('#mpEffort').textContent = effort ? EFFORT_LABEL[effort] || effort : '';
       $('#mpRing').hidden = !effort;
@@ -310,7 +397,7 @@
     if (m.role === 'approval') return dayBreak + approvalHtml(m);
     const out = m.role === 'user';
     const first = dayBreak || !prev || !isBubble(prev) || !sameSender(prev, m);
-    const stamp = `<span class="stamp">${clock(m.ts)}${out ? tickHtml(m) : ''}</span>`;
+    const stamp = `<span class="stamp">${m.starred ? '<span class="star-mark" title="Starred">★</span>' : ''}${clock(m.ts)}${out ? tickHtml(m) : ''}</span>`;
     const sender = !out && m.from && first ? `<span class="sender" style="color:${esc(m.from.color)}">${esc(m.from.avatar)} ${esc(m.from.name)}</span>` : '';
     const quote = m.replyTo ? `<span class="quote" data-goto="${esc(m.replyTo.id)}"><b>${esc(m.replyTo.name)}</b><span>${esc(m.replyTo.text)}</span></span>` : '';
     const body = out ? plain(m.text) : md(m.text);
@@ -319,6 +406,9 @@
         <div class="msg-actions">
           <button type="button" data-act="reply" title="Reply">↩</button>
           <button type="button" data-act="copy" title="Copy">⧉</button>
+          <button type="button" data-act="star" title="${m.starred ? 'Unstar' : 'Star'}">${m.starred ? '★' : '☆'}</button>
+          ${out ? '<button type="button" data-act="edit" title="Edit and send again">✎</button>'
+            : `<button type="button" data-act="speak" title="Read aloud">🔊</button><button type="button" data-act="regen" title="Ask again (resend your last message)">↻</button>`}
         </div>
         <div class="bubble">
           ${sender}
@@ -362,7 +452,7 @@
     denied: ['✕', 'Denied'],
     expired: ['⌛', 'Expired. The agent stopped before you answered'],
   };
-  const TOOL_VERB = { Bash: 'run a command', PowerShell: 'run a command', Write: 'write a file', Edit: 'edit a file', MultiEdit: 'edit a file', NotebookEdit: 'edit a notebook' };
+  const TOOL_VERB = { 'YouTube upload': 'upload a video to YouTube', 'YouTube channel': 'change your YouTube channel', Bash: 'run a command', PowerShell: 'run a command', Write: 'write a file', Edit: 'edit a file', MultiEdit: 'edit a file', NotebookEdit: 'edit a notebook' };
 
   function approvalHtml(m) {
     const a = m.approval;
@@ -379,7 +469,7 @@
           <input class="ap-note" placeholder="Optional: tell it what to do instead (sent if you deny)" maxlength="500">
           <div class="ap-actions">
             <button type="button" class="ap-deny" data-approve="deny" data-aid="${a.id}">Deny</button>
-            <button type="button" class="ap-always" data-approve="always" data-aid="${a.id}" title="Don't ask again for similar actions by this agent">Always allow</button>
+            ${a.noAlways ? '' : `<button type="button" class="ap-always" data-approve="always" data-aid="${a.id}" title="Don't ask again for similar actions by this agent">Always allow</button>`}
             <button type="button" class="ap-allow" data-approve="allow" data-aid="${a.id}">Allow</button>
           </div>` : `<div class="ap-result">${esc(done[1])}${a.note ? `: “${esc(a.note)}”` : ''}</div>`}
       </div>`;
@@ -401,7 +491,46 @@
     el.scrollTop = el.scrollHeight;
   }
 
+  // Consecutive tool steps fold into one compact row ("4 steps · Bash, Edit"); click to expand.
+  // Approval cards and messages break a run, so they always stay visible.
+  const openRuns = new Set(); // id of the first step of each expanded run
+  function compactTools() {
+    const el = $('#messages');
+    el.querySelectorAll('.tool-run').forEach((n) => n.remove());
+    let run = [];
+    const flush = () => {
+      if (run.length >= 2) {
+        const key = run[0].dataset.id;
+        const open = openRuns.has(key);
+        const steps = run.map((n) => activeMessages.find((m) => m.id === n.dataset.id)?.tool).filter(Boolean);
+        const state = steps.some((t) => t.status === 'running') ? 'running' : steps.some((t) => t.status === 'error') ? 'error' : 'done';
+        const names = [...new Set(steps.map((t) => t.name))];
+        const who = activeMessages.find((m) => m.id === key)?.from;
+        const row = document.createElement('div');
+        row.className = 'tool-run' + (open ? ' open' : '');
+        row.dataset.run = key;
+        row.innerHTML = `<span class="tstate ${state}">${state === 'running' ? '<span class="spin"></span>' : state === 'error' ? '!' : '✓'}</span>` +
+          `${who ? `<span class="who">${esc(who.avatar)}</span>` : ''}<b>${run.length} steps</b><span class="targ">${esc(names.slice(0, 4).join(', '))}${names.length > 4 ? '…' : ''}</span><span class="chev">${open ? '▾' : '▸'}</span>`;
+        run[0].before(row);
+        for (const n of run) n.classList.toggle('folded', !open);
+      } else for (const n of run) n.classList.remove('folded');
+      run = [];
+    };
+    for (const n of el.children) {
+      if (n.classList.contains('tool')) run.push(n);
+      else if (!n.classList.contains('typing-bubble')) flush();
+    }
+    flush();
+  }
+  $('#messages').addEventListener('click', (e) => {
+    const r = e.target.closest('.tool-run');
+    if (!r) return;
+    if (openRuns.has(r.dataset.run)) openRuns.delete(r.dataset.run); else openRuns.add(r.dataset.run);
+    compactTools();
+  });
+
   function renderTyping() {
+    compactTools();
     const el = $('#messages');
     el.querySelector('.typing-bubble')?.remove();
     const c = chats.get(activeId);
@@ -420,6 +549,7 @@
     el.insertAdjacentHTML('beforeend', messageHtml(m, prev));
     renderTyping();
     if (stick || m.role === 'user') scrollBottom(true);
+    else if (m.role === 'assistant' || m.role === 'approval') bumpJump();
   }
 
   function replaceMessage(m) {
@@ -479,6 +609,17 @@
       const m = activeMessages.find((x) => x.id === id);
       if (!m) return;
       if (act.dataset.act === 'copy') copyText(m.text);
+      if (act.dataset.act === 'edit') {
+        input.value = m.text || '';
+        autosize();
+        syncSendButton();
+        saveDraft();
+        input.focus();
+        input.selectionStart = input.selectionEnd = input.value.length;
+      }
+      if (act.dataset.act === 'regen') regenerate();
+      if (act.dataset.act === 'speak') speak(m);
+      if (act.dataset.act === 'star') api('PATCH', `/chats/${activeId}/messages/${m.id}`, { starred: !m.starred }).catch((err) => toast(err.message));
       if (act.dataset.act === 'reply') {
         const c = chats.get(activeId);
         setReply({ id: m.id, name: m.role === 'user' ? 'You' : m.from?.name || c.name, text: (m.text || '').slice(0, 300), color: m.from?.color });
@@ -488,11 +629,7 @@
     const cc = e.target.closest('.copy-code');
     if (cc) return copyText(cc.parentElement.querySelector('code')?.innerText ?? cc.parentElement.innerText.replace(/^Copy/, ''));
     const q = e.target.closest('[data-goto]');
-    if (q) {
-      const node = $('#messages').querySelector(`[data-id="${q.dataset.goto}"]`);
-      if (node) { node.scrollIntoView({ block: 'center', behavior: 'smooth' }); node.classList.add('flash'); setTimeout(() => node.classList.remove('flash'), 1300); }
-      return;
-    }
+    if (q) return gotoMessage(q.dataset.goto);
     const img = e.target.closest('img[data-full]');
     if (img) {
       const lb = document.createElement('div');
@@ -511,8 +648,9 @@
     $('#btnSend').hidden = !hasContent && !!Speech;
     $('#btnMic').hidden = !!hasContent || !Speech;
   }
-  input.addEventListener('input', () => { autosize(); syncSendButton(); updateMentions(); });
+  input.addEventListener('input', () => { autosize(); syncSendButton(); updateMentions(); updateSlash(); saveDraft(); });
   input.addEventListener('keydown', (e) => {
+    if (handleSlashKeys(e)) return;
     if (handleMentionKeys(e)) return;
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
   });
@@ -530,6 +668,7 @@
       replyTo: replyTo ? { id: replyTo.id, name: replyTo.name, text: replyTo.text } : undefined,
     };
     input.value = '';
+    saveDraft();
     autosize();
     clearAtts();
     clearReply();
@@ -690,6 +829,306 @@
     if (b) insertMention(mentionList[+b.dataset.i]);
   };
 
+  // ---------- drafts, jump-to-latest, ask again, read aloud ----------
+  let draftTimer;
+  function saveDraft() {
+    if (!activeId) return;
+    if (input.value.trim()) drafts[activeId] = input.value; else delete drafts[activeId];
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(() => store('cc-drafts', drafts), 300);
+  }
+
+  let jumpCount = 0;
+  function hideJump() { jumpCount = 0; $('#btnJump').hidden = true; $('#jumpCount').hidden = true; }
+  function bumpJump() {
+    jumpCount++;
+    $('#jumpCount').textContent = jumpCount;
+    $('#jumpCount').hidden = false;
+    $('#btnJump').hidden = false;
+  }
+  $('#btnJump').onclick = () => { scrollBottom(true); hideJump(); };
+  $('#messages').addEventListener('scroll', () => {
+    if (nearBottom()) hideJump();
+    else if ($('#btnJump').hidden) $('#btnJump').hidden = false;
+  }, { passive: true });
+
+  // Sends your latest message again, so the agent has another go.
+  async function regenerate() {
+    const last = [...activeMessages].reverse().find((m) => m.role === 'user');
+    if (!last) return toast('Nothing to resend yet.');
+    try {
+      await api('POST', `/chats/${activeId}/messages`, { text: last.text, attachments: last.attachments || [] });
+    } catch (e) { toast(e.message); }
+  }
+
+  let speaking = null;
+  function speak(m) {
+    if (!('speechSynthesis' in window)) return toast('Read aloud isn’t supported in this browser.');
+    speechSynthesis.cancel();
+    if (speaking === m.id) { speaking = null; return; }
+    // Code blocks and markdown symbols read badly, so they're left out.
+    const text = String(m.text || '').replace(/```[\s\S]*?```/g, ' (code) ').replace(/[#*_`>|]/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = navigator.language || 'en-US';
+    u.onend = u.onerror = () => { if (speaking === m.id) speaking = null; };
+    speaking = m.id;
+    speechSynthesis.speak(u);
+  }
+
+  // ---------- slash-command prompt templates ----------
+  // Typing "/" at the start of the message offers ready-made prompts; picking one fills it in.
+  const SLASH = [
+    ['review', 'Review the current uncommitted changes (git diff). List bugs, risky code and missing tests, most important first. Don\'t change any files.'],
+    ['test', 'Write or update tests for the code we just changed, run them, and fix anything that fails. Tell me what you covered.'],
+    ['explain', 'Explain how this project is organized: the main parts, how they connect, and where I should start reading.'],
+    ['fix', 'Run the build and the tests, then fix whatever fails. Tell me what was wrong and what you changed.'],
+    ['commit', 'Write a clear commit message for the current changes and commit them. Don\'t push.'],
+    ['plan', 'Before changing anything, write a short step-by-step plan for: '],
+  ];
+  let slashIdx = 0;
+  let slashList = [];
+  function updateSlash() {
+    const m = input.value.match(/^\/(\w*)$/);
+    const sp = $('#slashPop');
+    const all = [...myTemplates.map((t) => [t.name, t.text, true]), ...SLASH.filter(([n]) => !myTemplates.some((t) => t.name === n))];
+    slashList = m ? all.filter(([name]) => name.startsWith(m[1].toLowerCase())) : [];
+    if (!m) { sp.hidden = true; return; }
+    slashIdx = Math.min(slashIdx, Math.max(0, slashList.length - 1));
+    sp.innerHTML = slashList.map(([name, text, mine], i) =>
+      `<button type="button" class="${i === slashIdx ? 'sel' : ''}" data-si="${i}"><b>/${esc(name)}${mine ? ' <span class="tpl-mine">yours</span>' : ''}</b><small>${esc(text.slice(0, 70))}${text.length > 70 ? '…' : ''}</small></button>`).join('') +
+      '<button type="button" class="tpl-manage" data-tpl-manage>✎ Your templates…</button>';
+    sp.hidden = false;
+  }
+  function insertSlash([, text]) {
+    input.value = text;
+    input.selectionStart = input.selectionEnd = text.length;
+    $('#slashPop').hidden = true;
+    autosize();
+    syncSendButton();
+    input.focus();
+  }
+  function handleSlashKeys(e) {
+    if ($('#slashPop').hidden) return false;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      slashIdx = (slashIdx + (e.key === 'ArrowDown' ? 1 : -1) + slashList.length) % slashList.length;
+      updateSlash();
+      return true;
+    }
+    if (((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') && slashList.length) { e.preventDefault(); insertSlash(slashList[slashIdx]); return true; }
+    if (e.key === 'Escape') { $('#slashPop').hidden = true; return true; }
+    return false;
+  }
+  $('#slashPop').onclick = (e) => {
+    if (e.target.closest('[data-tpl-manage]')) { $('#slashPop').hidden = true; return openTemplates(); }
+    const b = e.target.closest('[data-si]');
+    if (b) insertSlash(slashList[+b.dataset.si]);
+  };
+
+  // Your own templates, kept in this browser.
+  let myTemplates = load('cc-templates', []);
+  function renderTemplates() {
+    $('#tplList').innerHTML = myTemplates.length
+      ? myTemplates.map((t, i) => `<li><b>/${esc(t.name)}</b><span>${esc(t.text)}</span><button type="button" data-tpl-rm="${i}" aria-label="Delete">✕</button></li>`).join('')
+      : '<li class="st-empty">No templates of your own yet.</li>';
+  }
+  function openTemplates() {
+    renderTemplates();
+    $('#tplName').value = '';
+    $('#tplText').value = '';
+    $('#tplDialog').showModal();
+  }
+  $('#tplAdd').onclick = () => {
+    const name = $('#tplName').value.trim().replace(/^\//, '').toLowerCase();
+    const text = $('#tplText').value.trim();
+    if (!/^[a-z0-9_-]{1,24}$/.test(name)) return toast('Command: letters, numbers, - or _ only');
+    if (!text) return toast('Write the prompt for this template');
+    myTemplates = [...myTemplates.filter((t) => t.name !== name), { name, text }];
+    store('cc-templates', myTemplates);
+    $('#tplName').value = '';
+    $('#tplText').value = '';
+    renderTemplates();
+    toast(`Saved /${name}`);
+  };
+  $('#tplList').onclick = (e) => {
+    const b = e.target.closest('[data-tpl-rm]');
+    if (!b) return;
+    myTemplates.splice(+b.dataset.tplRm, 1);
+    store('cc-templates', myTemplates);
+    renderTemplates();
+  };
+
+  // ---------- search in this chat ----------
+  let findHits = [];
+  let findPos = -1;
+  function openFind() {
+    if (!activeId) return;
+    $('#findBar').hidden = false;
+    $('#findInput').focus();
+    $('#findInput').select();
+    runFind();
+  }
+  function clearMarks() {
+    for (const mk of $('#messages').querySelectorAll('mark.find')) mk.replaceWith(...mk.childNodes);
+    $('#messages').querySelectorAll('.find-current').forEach((n) => n.classList.remove('find-current'));
+    $('#messages').normalize();
+  }
+  function closeFind() {
+    $('#findBar').hidden = true;
+    clearMarks();
+    findHits = [];
+  }
+  // Marks every match in the rendered messages (text only, not code-copy buttons or tool cards).
+  function runFind() {
+    clearMarks();
+    const q = $('#findInput').value.trim().toLowerCase();
+    findHits = [];
+    if (q) {
+      for (const node of $('#messages').querySelectorAll('.msg .text, .sys')) {
+        const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+        const texts = [];
+        while (walker.nextNode()) if (!walker.currentNode.parentElement.closest('.copy-code')) texts.push(walker.currentNode);
+        for (const t of texts) {
+          const lower = t.nodeValue.toLowerCase();
+          let at = lower.indexOf(q);
+          if (at < 0) continue;
+          const frag = document.createDocumentFragment();
+          let last = 0;
+          while (at >= 0) {
+            frag.append(t.nodeValue.slice(last, at));
+            const mk = document.createElement('mark');
+            mk.className = 'find';
+            mk.textContent = t.nodeValue.slice(at, at + q.length);
+            frag.append(mk);
+            findHits.push(mk);
+            last = at + q.length;
+            at = lower.indexOf(q, last);
+          }
+          frag.append(t.nodeValue.slice(last));
+          t.replaceWith(frag);
+        }
+      }
+    }
+    findPos = findHits.length ? findHits.length - 1 : -1; // newest match first, like scrolling up
+    showFind();
+  }
+  function showFind() {
+    $('#findCount').textContent = $('#findInput').value.trim() ? (findHits.length ? `${findPos + 1} of ${findHits.length}` : 'No results') : '';
+    $('#messages').querySelectorAll('.find-current').forEach((n) => n.classList.remove('find-current'));
+    const mk = findHits[findPos];
+    if (mk) { mk.classList.add('find-current'); mk.scrollIntoView({ block: 'center' }); }
+  }
+  function stepFind(dir) {
+    if (!findHits.length) return;
+    findPos = (findPos + dir + findHits.length) % findHits.length;
+    showFind();
+  }
+  let findTimer;
+  $('#findInput').addEventListener('input', () => { clearTimeout(findTimer); findTimer = setTimeout(runFind, 120); });
+  $('#findInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); stepFind(e.shiftKey ? 1 : -1); }
+    if (e.key === 'Escape') { e.preventDefault(); closeFind(); input.focus(); }
+  });
+  $('#findPrev').onclick = () => stepFind(-1);
+  $('#findNext').onclick = () => stepFind(1);
+  $('#findClose').onclick = closeFind;
+  $('#btnFind').onclick = () => ($('#findBar').hidden ? openFind() : closeFind());
+
+  // ---------- quick switcher (Ctrl+K) ----------
+  const switcher = $('#switcher');
+  let swList = [];
+  let swIdx = 0;
+  function renderSwitcher() {
+    const q = $('#swInput').value.trim().toLowerCase();
+    const all = sortedChats().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    // Names that start with the query first, then ones that contain it anywhere.
+    swList = q
+      ? [...all.filter((c) => c.name.toLowerCase().startsWith(q)), ...all.filter((c) => !c.name.toLowerCase().startsWith(q) && (c.name + ' ' + (c.cwd || '')).toLowerCase().includes(q))]
+      : all.filter((c) => c.id !== activeId);
+    swIdx = Math.min(swIdx, Math.max(0, swList.length - 1));
+    $('#swList').innerHTML = swList.length ? swList.slice(0, 30).map((c, i) => `
+      <li class="${i === swIdx ? 'sel' : ''}" data-sw="${c.id}">
+        <div class="avatar sm" style="--av:${c.color}">${esc(c.avatar)}</div>
+        <span class="sw-name">${esc(c.name)}</span>
+        <span class="sw-sub">${c.running ? 'working…' : unread[c.id] ? `${unread[c.id]} unread` : esc(c.type === 'group' ? 'group' : PROVIDER_SHORT[providerOf(c)] || '')}</span>
+      </li>`).join('') : '<li class="sw-empty">No chats match</li>';
+    $('#swList').querySelector('.sel')?.scrollIntoView({ block: 'nearest' });
+  }
+  function openSwitcher() {
+    if (!chats.size) return;
+    $('#swInput').value = '';
+    swIdx = 0;
+    renderSwitcher();
+    if (!switcher.open) switcher.showModal();
+    $('#swInput').focus();
+  }
+  function pickSwitcher(id) {
+    switcher.close();
+    if (id) openChat(id);
+  }
+  $('#swInput').addEventListener('input', () => { swIdx = 0; renderSwitcher(); });
+  $('#swInput').addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const n = Math.min(swList.length, 30);
+      if (n) swIdx = (swIdx + (e.key === 'ArrowDown' ? 1 : -1) + n) % n;
+      renderSwitcher();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      pickSwitcher(swList[swIdx]?.id);
+    }
+  });
+  $('#swList').onclick = (e) => {
+    const li = e.target.closest('[data-sw]');
+    if (li) pickSwitcher(li.dataset.sw);
+  };
+  switcher.addEventListener('click', (e) => { if (e.target === switcher) switcher.close(); });
+
+  document.addEventListener('keydown', (e) => {
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      if (switcher.open) switcher.close(); else openSwitcher();
+    } else if (mod && e.key === '/') {
+      e.preventDefault();
+      const d = $('#keysDialog');
+      if (d.open) d.close(); else d.showModal();
+    } else if (e.altKey && !mod && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && !document.querySelector('dialog[open]')) {
+      // Walk the chat list as it's shown (same filter and search).
+      const ids = [...$('#chatList').querySelectorAll('.chat-item')].map((li) => li.dataset.id);
+      if (!ids.length) return;
+      e.preventDefault();
+      const i = ids.indexOf(activeId);
+      const next = ids[i < 0 ? 0 : (i + (e.key === 'ArrowDown' ? 1 : -1) + ids.length) % ids.length];
+      openChat(next);
+    } else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f' && activeId && !document.querySelector('dialog[open]')) {
+      e.preventDefault();
+      openFind();
+    }
+  });
+
+  // ---------- starred messages ----------
+  const starredDialog = $('#starredDialog');
+  $('#btnStarred').onclick = async () => {
+    let list;
+    try { list = await api('GET', '/starred'); } catch (e) { return toast(e.message); }
+    $('#starredList').innerHTML = list.length ? list.map((s) => `
+      <li data-chat="${s.chatId}" data-msg="${s.message.id}">
+        <div class="avatar sm" style="--av:${s.color}">${esc(s.avatar)}</div>
+        <div class="st-body">
+          <div class="st-head"><b>${esc(s.chatName)}</b><span>${esc(s.message.role === 'user' ? 'You' : s.message.from?.name || s.chatName)} · ${esc(listTime(s.message.ts))}</span></div>
+          <div class="st-text">${esc(String(s.message.text || '').replace(/[#*_`>]/g, '').slice(0, 220))}</div>
+        </div>
+      </li>`).join('') : '<li class="st-empty">No starred messages yet. Hover a message and press ☆ to keep it here.</li>';
+    starredDialog.showModal();
+  };
+  $('#starredList').onclick = (e) => {
+    const li = e.target.closest('[data-chat]');
+    if (!li) return;
+    starredDialog.close();
+    openChat(li.dataset.chat, li.dataset.msg);
+  };
+
   // ---------- model / effort popover ----------
   const pop = $('#modelPop');
   $('#modelPill').onclick = (e) => {
@@ -704,7 +1143,8 @@
   });
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    if (!pop.hidden) pop.hidden = true;
+    if (!$('#findBar').hidden && $('#findBar').contains(document.activeElement)) closeFind();
+    else if (!pop.hidden) pop.hidden = true;
     else if (!$('#usageCard').hidden) $('#usageCard').hidden = true;
     else if (!$('#drawer').hidden) $('#drawer').hidden = true;
     else if (replyTo) clearReply();
@@ -721,11 +1161,11 @@
         <span class="check">✓</span>
       </button>`).join('');
     const efforts = effortsFor(c);
-    const current = efforts.includes(c.effort) ? c.effort : (efforts.includes('medium') ? 'medium' : efforts[0]);
+    const current = effortOf(c);
     const selIdx = efforts.indexOf(current);
     $('#popEfforts').style.gridTemplateColumns = `repeat(${Math.max(efforts.length, 1)}, 1fr)`;
     $('#popEfforts').innerHTML = efforts.length
-      ? efforts.map((e, i) => `<button class="effort-btn ${i < selIdx ? 'on' : ''} ${e === current ? 'sel' : ''}" data-effort="${e}">${EFFORT_LABEL[e]}</button>`).join('')
+      ? efforts.map((e, i) => `<button class="effort-btn ${i < selIdx ? 'on' : ''} ${e === current ? 'sel' : ''}" data-effort="${esc(e)}">${esc(EFFORT_LABEL[e] || e)}</button>`).join('')
       : '<span class="pop-hint" style="padding:0">This model has a fixed thinking level.</span>';
   }
   pop.onclick = async (e) => {
@@ -753,33 +1193,51 @@
     const drives = (meta.drives || []).join(' ');
     const prov = providerOf(c);
     const isAgy = prov === 'antigravity';
+    const isCodex = prov === 'codex';
+    const [cli, about] = PROVIDER_CLI[prov] || PROVIDER_CLI.claude;
     const efforts = effortsFor(c);
     const providerOpts = Object.entries(meta.providers || { claude: { name: 'Claude Code', available: true } }).map(([id, p]) =>
       `<option value="${id}" ${id === prov ? 'selected' : ''} ${p.available ? '' : 'disabled'}>${esc(p.name)}${p.available ? '' : ' (not installed)'}</option>`).join('');
     return `
       <label class="field"><span>Provider</span>
         <select name="provider">${providerOpts}</select>
-        <small>${isAgy ? 'Runs Google Antigravity’s agent (<code>agy</code>) with your Google account.' : 'Runs Claude Code (<code>claude</code>) with your Claude plan.'}</small></label>
+        <small>${about}</small></label>
       <label class="field"><span>Model</span>
         <select name="model">${opt(modelsFor(prov).map((m) => m.id), c.model, modelName)}</select></label>
       <label class="field"><span>Effort</span>
         ${efforts.length
-          ? `<select name="effort">${opt(efforts, efforts.includes(c.effort) ? c.effort : (efforts.includes('medium') ? 'medium' : efforts[0]), (e) => EFFORT_LABEL[e])}</select>`
+          ? `<select name="effort">${opt(efforts, effortOf(c), (e) => EFFORT_LABEL[e] || e)}</select>`
           : '<select disabled><option>Fixed for this model</option></select>'}</label>
       <div class="field"><span>Working folder</span>
         <div class="inline"><input name="cwd" value="${esc(c.cwd)}" placeholder="${esc(meta.home)}" spellcheck="false"><button type="button" data-browse="cwd">Browse…</button></div>
-        <small>Where the agent starts, like running <code>${isAgy ? 'agy' : 'claude'}</code> in this folder.</small></div>
+        <small>Where the agent starts, like running <code>${cli}</code> in this folder.</small></div>
       <label class="switch"><input type="checkbox" name="fullAccess" ${c.fullAccess !== false ? 'checked' : ''}>
-        <span><b>Full PC access</b><small class="muted" style="text-align:left;display:block">Lets the agent read and edit files on every drive (${esc(drives)}), not just its folder.</small></span></label>
+        <span><b>Full PC access</b><small class="muted" style="text-align:left;display:block">${isCodex
+          ? 'Codex can always read your whole PC. Its edits and commands outside the working folder ask you first in “Ask when risky”.'
+          : `Lets the agent read and edit files on every drive (${esc(drives)}), not just its folder.`}</small></span></label>
       <label class="field"><span>Permissions</span>
-        <select name="permissionMode">${opt(meta.permissionModes, c.permissionMode, (p) => PERMISSION_INFO[p] || p)}</select>
+        <select name="permissionMode">${opt(meta.permissionModes, c.permissionMode, (p) => permissionInfo(p, prov))}</select>
         <small class="${c.permissionMode === 'bypassPermissions' ? 'warn' : ''}">${c.permissionMode === 'bypassPermissions'
           ? 'Bypass lets the agent run any command without checks.' + (c.fullAccess !== false ? ' Combined with full PC access it can change anything on this computer.' : '')
+          : c.permissionMode === 'ask'
+            ? (isCodex
+              ? 'Every command and file edit Codex asks about waits for your Allow/Deny. Codex still runs simple read-only commands (like ls or cat) without asking.'
+              : isAgy
+                ? 'Every command Antigravity wants to run waits for your Allow/Deny. File edits inside its folders happen directly.'
+                : 'Every command and file edit waits for your Allow/Deny. Reading and searching files doesn’t ask.') +
+              ' “Always allow” on a card skips asking for similar ones.'
           : (c.permissionMode === 'smart' || c.permissionMode === 'ask') && isAgy
             ? 'Antigravity can’t ask mid-task, so ClaudeChat checks every command it wants to run: safe ones run, risky ones wait for your Allow/Deny. File edits inside its folders happen directly.'
+          : (c.permissionMode === 'smart' || c.permissionMode === 'ask') && isCodex
+            ? 'Codex works in its sandbox and asks before commands and edits. ClaudeChat answers: safe ones run, risky ones wait for your Allow/Deny.'
+          : isCodex && c.permissionMode === 'plan'
+            ? 'Codex runs with a read-only sandbox: it can look around but not change anything.'
+          : isCodex && c.permissionMode !== 'bypassPermissions'
+            ? 'Codex never asks in this mode. Its sandbox keeps writes inside the working folder.'
           : c.permissionMode === 'smart' || c.permissionMode === 'ask'
             ? 'Risky means deleting files, editing outside the working folder, system or registry changes, git push, admin rights, secrets and the like. The agent pauses and you get Allow/Deny in the chat.'
-            : 'This mode never asks you. Pick “Ask when risky” to approve dangerous actions yourself.'}</small></label>
+            : 'This mode never asks you. Pick “Ask when risky” to approve dangerous actions yourself.'}</small>
+        ${agents().length > 1 && c.id ? '<button type="button" class="link-btn" data-allmode>Use this for all agents</button>' : ''}</label>
       ${(c.allowRules || []).length ? `
       <div class="field"><span>Always allowed</span>
         <div class="rules">${c.allowRules.map((r) => `<span class="rule">${esc(r.replace(':', ' · '))}<button type="button" data-rmrule="${esc(r)}" aria-label="Remove">✕</button></span>`).join('')}</div>
@@ -788,8 +1246,8 @@
         <textarea name="systemPrompt" rows="3" placeholder="e.g. You are my backend reviewer. Be terse.">${esc(c.systemPrompt || '')}</textarea>
         <small>Added to the agent’s system prompt.</small></label>
       <label class="field"><span>Resume session ID</span>
-        <input name="sessionId" value="${esc(c.sessionId || '')}" placeholder="optional: continue an existing Claude Code conversation" spellcheck="false" pattern="[0-9a-fA-F-]{36}">
-        <small>Paste a session ID (shown by <code>claude --resume</code>) to reconnect this agent to that conversation's memory.</small></label>`;
+        <input name="sessionId" value="${esc(c.sessionId || '')}" placeholder="optional: continue an existing ${isCodex ? 'Codex' : 'Claude Code'} conversation" spellcheck="false" pattern="[0-9a-fA-F-]{36}">
+        <small>Paste a ${isCodex ? 'session ID (shown by <code>codex resume</code>)' : 'session ID (shown by <code>claude --resume</code>)'} to reconnect this agent to that conversation's memory.</small></label>`;
   }
 
   function groupSettingsHtml(g) {
@@ -850,12 +1308,28 @@
     const count = c.messageCount ?? activeMessages.length;
     $('#infoMeta').innerHTML = isGroup
       ? `Group · ${(c.members || []).length} agents · ${count} messages${cost}`
-      : `${esc(modelName(c.model))} · ${count} messages${cost}<br><small>${c.sessionId ? 'session ' + esc(c.sessionId.slice(0, 8)) : 'no session yet'}</small>`;
+      : `${esc(modelName(c.model))} · ${count} messages${cost}<br><small>${c.sessionId ? 'session ' + esc(c.sessionId.slice(0, 8)) : 'no session yet'}</small>${statsHtml(c)}`;
     $('#infoForm').innerHTML = isGroup ? groupSettingsHtml(c) : agentSettingsHtml(c);
     $('#btnPin').textContent = c.pinned ? '📌 Unpin chat' : '📌 Pin chat';
     $('#btnMute').textContent = c.muted ? '🔔 Unmute notifications' : '🔕 Mute notifications';
     $('#btnDelete').textContent = isGroup ? '🗑️ Delete group' : '🗑️ Delete agent';
+    $('#btnArchive').textContent = c.archived ? '🗄️ Unarchive chat' : '🗄️ Archive chat';
+    $('#btnDuplicate').textContent = isGroup ? '🧬 Duplicate group' : '🧬 Duplicate agent';
     $('#infoEmojis').innerHTML = meta.avatars.map((a) => `<button type="button" data-a="${a}">${a}</button>`).join('');
+  }
+
+  // Per-agent totals, counting its work in groups too.
+  function statsHtml(c) {
+    const st = c.stats;
+    if (!st?.turns) return '';
+    const cells = [
+      [st.turns, st.turns === 1 ? 'turn' : 'turns'],
+      [tokenCount(st.tokens), 'tokens'],
+      ...(st.cost ? [[money(st.cost), 'est. cost']] : []),
+      ...(st.errors ? [[st.errors, st.errors === 1 ? 'error' : 'errors']] : []),
+    ];
+    return `<div class="stats">${cells.map(([v, l]) => `<span><b>${esc(v)}</b>${esc(l)}</span>`).join('')}</div>` +
+      (st.lastAt ? `<small>last worked ${esc(ago(st.lastAt))}</small>` : '');
   }
 
   $('#infoAvatar').onclick = () => ($('#infoEmojis').hidden = !$('#infoEmojis').hidden);
@@ -883,12 +1357,35 @@
   });
   $('#infoForm').addEventListener('submit', (e) => e.preventDefault());
   $('#infoForm').addEventListener('click', async (e) => {
+    if (e.target.closest('[data-allmode]')) {
+      e.preventDefault();
+      const mode = chats.get(activeId).permissionMode;
+      const others = agents().filter((a) => a.permissionMode !== mode);
+      if (!others.length) return toast('All agents already use this.');
+      if (!confirm(`Set ${others.length} other agent${others.length === 1 ? '' : 's'} to “${permissionInfo(mode, 'claude').split(':')[0]}”?`)) return;
+      for (const a of others) await updateChat(a.id, { permissionMode: mode });
+      return toast('Done. All agents use the same permissions now.');
+    }
     const b = e.target.closest('[data-rmrule]');
     if (!b) return;
     const c = chats.get(activeId);
     await updateChat(activeId, { allowRules: (c.allowRules || []).filter((r) => r !== b.dataset.rmrule) });
     renderDrawer();
   });
+  $('#btnArchive').onclick = async () => {
+    const c = chats.get(activeId);
+    await updateChat(activeId, { archived: !c.archived });
+    toast(c.archived ? 'Moved back to your chats' : 'Archived. Find it under the “Archived” filter.');
+    renderDrawer();
+  };
+  $('#btnDuplicate').onclick = async () => {
+    try {
+      const c = await api('POST', `/chats/${activeId}/duplicate`);
+      chats.set(c.id, c);
+      openChat(c.id);
+      toast('Made a copy with the same settings (fresh memory).');
+    } catch (e) { toast(e.message); }
+  };
   $('#btnPin').onclick = async () => { const c = chats.get(activeId); await updateChat(activeId, { pinned: !c.pinned }); renderDrawer(); };
   $('#btnMute').onclick = async () => { const c = chats.get(activeId); await updateChat(activeId, { muted: !c.muted }); renderDrawer(); };
   $('#btnExport').onclick = () => { window.location.href = `/api/chats/${activeId}/export`; };
@@ -908,7 +1405,7 @@
   let newAvatar = null;
   function openNew() {
     newAvatar = meta.avatars[agents().length % meta.avatars.length];
-    const defaults = { provider: 'claude', model: 'claude-opus-5-5', effort: 'high', permissionMode: 'smart', fullAccess: true, cwd: meta.home, systemPrompt: '' };
+    const defaults = { provider: 'claude', model: 'claude-opus-5-5', effort: 'high', permissionMode: 'ask', fullAccess: true, cwd: meta.home, systemPrompt: '' };
     $('#newAvatars').innerHTML = meta.avatars.map((a) => `<button type="button" data-a="${a}" class="${a === newAvatar ? 'sel' : ''}">${a}</button>`).join('');
     renderNewSettings(defaults, '');
     newDialog.showModal();
@@ -927,9 +1424,10 @@
     if (e.target.name === 'provider') {
       const first = modelsFor(v.provider)[0];
       v.model = first?.id;
-      v.effort = v.provider === 'antigravity' ? 'medium' : 'high';
-      if (v.provider === 'antigravity' && newAvatar === meta.avatars[agents().length % meta.avatars.length]) {
-        newAvatar = '✨';
+      v.effort = first?.defaultEffort || (v.provider === 'claude' ? 'high' : 'medium');
+      const icon = { antigravity: '✨', codex: '🧪' }[v.provider];
+      if (icon && (newAvatar === meta.avatars[agents().length % meta.avatars.length] || ['✨', '🧪'].includes(newAvatar))) {
+        newAvatar = icon;
         $('#newAvatars').querySelectorAll('button').forEach((x) => x.classList.toggle('sel', x.dataset.a === newAvatar));
       }
     }
@@ -1120,8 +1618,8 @@
     $('#ucSpend').innerHTML = sp ? `
       <div class="sp-tot"><span>Today ${money(sp.today)}</span><span>7 days ${money(sp.week)}</span></div>
       ${usage.agents.filter((a) => a.total > 0 || a.tokens > 0).slice(0, 8).map((a) => `
-        <div class="sp-row"><span>${esc(a.avatar)}</span><span>${esc(a.name)}</span><span>${a.provider === 'antigravity' ? `${tokenCount(a.tokens)} tokens` : `${money(a.today)} today · ${money(a.total)}`}</span></div>`).join('') || '<div class="sp-row"><span></span><span>No activity yet</span><span></span></div>'}
-      <div class="uc-foot">Estimated API-equivalent cost reported by Claude Code. On a Pro/Max plan your agents count against the limits above instead. Antigravity agents show tokens used, which count against your Google plan, not the limits above.</div>` : '';
+        <div class="sp-row"><span>${esc(a.avatar)}</span><span>${esc(a.name)}</span><span>${a.provider !== 'claude' ? `${tokenCount(a.tokens)} tokens` : `${money(a.today)} today · ${money(a.total)}`}</span></div>`).join('') || '<div class="sp-row"><span></span><span>No activity yet</span><span></span></div>'}
+      <div class="uc-foot">Estimated API-equivalent cost reported by Claude Code. On a Pro/Max plan your agents count against the limits above instead. Antigravity and Codex agents show tokens used, which count against your Google or OpenAI plan, not the limits above.</div>` : '';
   }
 
   $('#usageMini').onclick = (e) => {
@@ -1139,6 +1637,44 @@
     finally { b.disabled = false; b.style.animation = ''; }
   };
   setInterval(renderUsage, 30000);
+
+  // ---------- YouTube connection ----------
+  async function renderYouTube() {
+    let st;
+    try { st = await api('GET', '/youtube'); } catch (e) { return toast(e.message); }
+    $('#ytStatus').innerHTML = st.connected
+      ? `✅ Connected to <b>${esc(st.channel?.title || 'your channel')}</b>. Ask an agent to upload a video or change the channel; you'll get a card to approve each time.`
+      : st.configured ? 'Google app saved. Press <b>Connect YouTube</b> and sign in.' : 'Not set up yet. It takes about 5 minutes, once.';
+    $('#ytSetup').hidden = st.connected;
+    if (!$('#ytClientId').value) $('#ytClientId').value = st.clientId || '';
+    $('#ytConnect').hidden = st.connected || !st.configured;
+    $('#ytSave').hidden = st.connected;
+    $('#ytDisconnect').hidden = !st.connected;
+  }
+  function openYouTube() {
+    $('#ytSecret').value = '';
+    $('#ytDialog').showModal();
+    renderYouTube();
+  }
+  $('#ytSave').onclick = async () => {
+    try {
+      await api('POST', '/youtube/config', { clientId: $('#ytClientId').value, clientSecret: $('#ytSecret').value });
+      toast('Saved. Now press Connect YouTube.');
+      renderYouTube();
+    } catch (e) { toast(e.message); }
+  };
+  $('#ytConnect').onclick = async () => {
+    try {
+      const { url } = await api('POST', '/youtube/connect');
+      window.open(url, '_blank', 'noopener');
+      toast('Sign in with Google in the new window, then come back here.');
+    } catch (e) { toast(e.message); }
+  };
+  $('#ytDisconnect').onclick = async () => {
+    if (!confirm('Disconnect YouTube? Agents won’t be able to upload until you connect again.')) return;
+    await api('POST', '/youtube/disconnect').catch((e) => toast(e.message));
+    renderYouTube();
+  };
 
   // ---------- live events ----------
   function onEvent(ev) {
@@ -1207,6 +1743,9 @@
       case 'usage':
         usage = ev.usage;
         renderUsage();
+        break;
+      case 'youtube':
+        if ($('#ytDialog').open) renderYouTube();
         break;
     }
   }

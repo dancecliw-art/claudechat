@@ -1,6 +1,7 @@
-// ClaudeChat — a WhatsApp-style messenger where every contact is a Claude Code agent.
-// Zero dependencies: plain Node http + Server-Sent Events. Each agent runs the local
-// `claude` CLI in headless stream-json mode and resumes its own session per message.
+// ClaudeChat — a WhatsApp-style messenger where every contact is a coding agent.
+// Zero dependencies: plain Node http + Server-Sent Events. Each agent runs a local CLI
+// (Claude Code `claude`, Google Antigravity `agy` or OpenAI Codex `codex`) headless and
+// resumes its own session per message.
 
 const http = require('http');
 const fs = require('fs');
@@ -9,8 +10,11 @@ const os = require('os');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { assess } = require('./danger');
+const codex = require('./codex');
+const youtube = require('./youtube');
 
 const PORT = Number(process.env.PORT) || 4317;
+const APP_VERSION = '1.1.0';
 
 // Find the claude CLI: $CLAUDE_BIN, then PATH, then the default native-install location.
 function resolveClaude() {
@@ -35,6 +39,9 @@ function resolveAgy() {
   return fs.existsSync(local) ? local : null;
 }
 const AGY_BIN = resolveAgy();
+
+// OpenAI's Codex CLI: $CODEX_BIN, then PATH, then npm's global folder (see codex.js).
+const CODEX_BIN = codex.resolveCodex();
 
 // Packaged as ClaudeChat.exe (Node single-executable app): web files live inside the exe
 // and data/ sits next to the exe. Run with plain node: everything is next to this file.
@@ -99,6 +106,11 @@ function loadAgyModels() {
 
 const findAgyModel = (id) => agyModels.find((m) => m.id === id);
 
+// Codex's models come from its app-server (model/list), each with its own effort levels.
+let codexModels = codex.CODEX_FALLBACK_MODELS;
+const findCodexModel = (id) => codexModels.find((m) => m.id === id);
+const codexDefaultModel = () => (codexModels.find((m) => m.isDefault) || codexModels[0])?.id || 'gpt-5.5';
+
 // The concrete model id to pass to `agy --model` for an agent's model + effort.
 function agyModelId(agent) {
   const m = findAgyModel(agent.model);
@@ -120,6 +132,11 @@ function providersMeta() {
       available: !!AGY_BIN,
       models: agyModels.map((m) => ({ id: m.id, name: m.name, efforts: m.efforts })),
     },
+    codex: {
+      name: 'Codex (OpenAI)',
+      available: !!CODEX_BIN,
+      models: codexModels.map((m) => ({ id: m.id, name: m.name, efforts: m.efforts, defaultEffort: m.defaultEffort })),
+    },
   };
 }
 const COLORS = ['#25d366', '#53bdeb', '#ff8a65', '#c792ea', '#ffcb6b', '#f07178', '#89ddff', '#a5e075'];
@@ -140,6 +157,8 @@ if (sea) {
   process.on('uncaughtException', (e) => { write('Uncaught:', e && e.stack || e); });
   process.on('unhandledRejection', (e) => { write('Unhandled rejection:', e && e.stack || e); });
 }
+
+const yt = youtube.createYouTube(path.join(DATA_DIR, 'youtube.json'));
 
 let db = { chats: [], usage: null, costLog: [] };
 try {
@@ -342,12 +361,34 @@ function probeUsage() {
 
 // ---------- running the claude CLI ----------
 
+const RUNNERS = { claude: (o) => runClaude(o), antigravity: (o) => runAntigravity(o), codex: (o) => runCodex(o) };
+
 // One agent turn, on whichever CLI the agent uses. Resolves { sessionId, ok, stopped }.
-function runOnce(opts) {
-  return opts.agent.provider === 'antigravity' ? runAntigravity(opts) : runClaude(opts);
+// Also keeps per-agent stats (turns, tokens, cost) on the agent's own chat, so its info
+// panel counts work done in groups too.
+async function runOnce(opts) {
+  // A private ID in the agent's environment tells ClaudeChat which agent (and chat) is asking
+  // when it calls the local YouTube API. It only works while this turn runs. (Its name avoids
+  // KEY/SECRET/TOKEN: Codex drops such variables from commands, see shell_environment.rs.)
+  const key = crypto.randomBytes(18).toString('base64url');
+  agentKeys.set(key, { chat: opts.chat, agent: opts.agent, from: opts.from });
+  const env = { ...process.env, CLAUDECHAT_URL: `http://localhost:${PORT}`, CLAUDECHAT_AGENT: key };
+  if (yt.status().connected) opts = { ...opts, systemPrompt: [opts.systemPrompt, YOUTUBE_HOWTO].filter(Boolean).join('\n\n') };
+  let r;
+  try { r = await (RUNNERS[opts.agent.provider] || RUNNERS.claude)({ ...opts, env }); } finally { agentKeys.delete(key); }
+  const own = findChat(opts.agent.id);
+  if (own && !r.stopped) {
+    const st = own.stats || (own.stats = { turns: 0, tokens: 0, cost: 0 });
+    st.turns++;
+    st.tokens += r.tokens || 0;
+    st.cost += r.cost || 0;
+    if (!r.ok) st.errors = (st.errors || 0) + 1;
+    st.lastAt = now();
+  }
+  return r;
 }
 
-function runClaude({ chat, agent, sessionId, systemPrompt, prompt, from }) {
+function runClaude({ chat, agent, sessionId, systemPrompt, prompt, from, env }) {
   return new Promise((resolve) => {
     // Two-way stdio: the prompt goes in as a stream-json message, and the CLI sends its
     // permission prompts back to us as control requests (answered in onControlRequest).
@@ -366,7 +407,7 @@ function runClaude({ chat, agent, sessionId, systemPrompt, prompt, from }) {
     let cwd = agent.cwd;
     if (!cwd || !fs.existsSync(cwd)) cwd = os.homedir();
 
-    const proc = spawn(CLAUDE_BIN, args, { cwd, windowsHide: true, env: process.env });
+    const proc = spawn(CLAUDE_BIN, args, { cwd, windowsHide: true, env: env || process.env });
     const run = { proc, agent, cwd, from, who: from?.name, sessionId, streamed: new Map(), streamedMsgIds: new Set(), tools: new Map(), pending: new Set(), stderr: '' };
     addRun(chat.id, run);
     status(chat, run, 'typing…');
@@ -405,7 +446,7 @@ function runClaude({ chat, agent, sessionId, systemPrompt, prompt, from }) {
         pushMessage(chat, { role: 'system', text: `${run.who ? run.who + ' ' : 'Agent '}exited (code ${code}).${tail ? '\n' + tail : ''}`, error: true });
       }
       save();
-      resolve({ sessionId: run.sessionId, ok: run.gotResult && !run.isError, stopped: run.stopped });
+      resolve({ sessionId: run.sessionId, ok: run.gotResult && !run.isError, stopped: run.stopped, cost: run.cost || 0, tokens: run.tokens || 0 });
     });
   });
 }
@@ -438,7 +479,7 @@ function onControlRequest(chat, run, ev) {
   const allow = () => send(run, { type: 'control_response', response: { subtype: 'success', request_id: ev.request_id, response: { behavior: 'allow', updatedInput: req.input } } });
   const a = assess(req.tool_name, req.input, run.cwd, os.homedir());
   const mustAsk = agent.permissionMode === 'ask' || a.risky;
-  const remembered = (agent.allowRules || []).includes(a.ruleKey);
+  const remembered = isRemembered(agent, a);
   console.log(`[control] ${agent.name}: ${req.tool_name} ${a.summary.slice(0, 80)} -> ${mustAsk && !remembered ? 'ASK' : 'allow'}${a.reasons.length ? ' (' + a.reasons.join('; ') + ')' : ''}`);
   if (!mustAsk || remembered) return allow();
 
@@ -453,23 +494,37 @@ function onControlRequest(chat, run, ev) {
       summary: a.summary,
       reasons: a.reasons.length ? a.reasons : ['This agent asks before every change'],
       agentName: agent.name,
+      noAlways: a.alwaysAsk || undefined,
       status: 'pending',
     },
   });
-  approvals.set(id, { chat, run, agent, requestId: ev.request_id, input: req.input, ruleKey: a.ruleKey, message });
+  approvals.set(id, { chat, run, agent, requestId: ev.request_id, input: req.input, ruleKey: a.ruleKey, alwaysAsk: a.alwaysAsk, message });
   run.pending.add(id);
   status(chat, run, 'waiting for your approval');
   broadcast({ type: 'chat', chat: summary(chat) });
 }
 
+// "Always allow" rules never cover actions danger.js marks alwaysAsk (like video uploads).
+const isRemembered = (agent, a) => !a.alwaysAsk && (agent.allowRules || []).includes(a.ruleKey);
+
 function decideApproval(id, decision, note) {
   const p = approvals.get(id);
   if (!p) return false;
+  if (decision === 'always' && p.alwaysAsk) decision = 'allow';
   approvals.delete(id);
   p.run.pending.delete(id);
   const { chat, run, agent } = p;
   if (decision === 'always' && !agent.allowRules.includes(p.ruleKey)) agent.allowRules.push(p.ruleKey);
   const allowed = decision === 'allow' || decision === 'always';
+  if (p.answer) {
+    // Codex approvals: answer the app-server's request on the still-running turn.
+    p.answer(allowed, note);
+    patchMessage(chat, p.message, { approval: { ...p.message.approval, status: allowed ? (decision === 'always' ? 'always' : 'allowed') : 'denied', note: note || undefined } });
+    status(chat, run, run.pending.size ? 'waiting for your approval' : 'typing…');
+    broadcast({ type: 'chat', chat: summary(chat) });
+    save();
+    return true;
+  }
   if (p.resolve) {
     // Antigravity approvals: ClaudeChat itself carries out (or refuses) the blocked action.
     patchMessage(chat, p.message, { approval: { ...p.message.approval, status: allowed ? (decision === 'always' ? 'always' : 'allowed') : 'denied', note: note || undefined } });
@@ -566,6 +621,9 @@ function handleEvent(chat, run, ev) {
     if (ev.session_id) run.sessionId = ev.session_id;
     chat.totalCost = (chat.totalCost || 0) + (ev.total_cost_usd || 0);
     logCost(chat, ev.total_cost_usd);
+    run.cost = ev.total_cost_usd || 0;
+    const u = ev.usage || {};
+    run.tokens = (u.input_tokens || 0) + (u.output_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
     chat.lastTurn = { durationMs: ev.duration_ms, cost: ev.total_cost_usd, turns: ev.num_turns };
     if (ev.is_error) {
       const msg = ev.result || (ev.errors || []).join('\n') || ev.subtype || 'Unknown error';
@@ -593,7 +651,7 @@ const AGY_TOOL_NAMES = {
 const SHELL_TOOL = process.platform === 'win32' ? 'PowerShell' : 'Bash';
 const MAX_AGY_ROUNDS = 15;
 
-function agyTurn({ chat, agent, sessionId, prompt, from, skipPermissions, cwd }) {
+function agyTurn({ chat, agent, sessionId, prompt, from, skipPermissions, cwd, env }) {
   return new Promise((resolve) => {
     const args = ['--input-format', 'stream-json', '--output-format', 'stream-json', '--model', agyModelId(agent)];
     if (sessionId) args.push('--conversation', sessionId);
@@ -607,7 +665,7 @@ function agyTurn({ chat, agent, sessionId, prompt, from, skipPermissions, cwd })
     for (const d of dirs) args.push('--add-dir', d);
     args.push('--print='); // print mode; the prompt arrives on stdin as stream-json
 
-    const proc = spawn(AGY_BIN, args, { cwd, windowsHide: true, env: process.env });
+    const proc = spawn(AGY_BIN, args, { cwd, windowsHide: true, env: env || process.env });
     const run = {
       proc, agent, cwd, from, who: from?.name, sessionId, steps: new Map(), commands: [], pending: new Set(), stderr: '', denied: [],
       // During a one-off "skip permissions" retry, ClaudeChat still stops unchecked risky commands.
@@ -648,7 +706,7 @@ function agyTurn({ chat, agent, sessionId, prompt, from, skipPermissions, cwd })
         pushMessage(chat, { role: 'system', text: `${run.who ? run.who + ' ' : 'Agent '}exited (code ${code}).${tail ? '\n' + tail : ''}`, error: true });
       }
       save();
-      resolve({ sessionId: run.sessionId, ok: !!run.gotResult && !run.isError, stopped: !!run.stopped, blocked });
+      resolve({ sessionId: run.sessionId, ok: !!run.gotResult && !run.isError, stopped: !!run.stopped, blocked, tokens: run.tokens || 0 });
     });
   });
 }
@@ -721,6 +779,7 @@ function handleAgyEvent(chat, run, ev) {
     if (r.conversation_id) run.sessionId = r.conversation_id;
     run.denied = r.denied_actions || [];
     const tokens = r.usage?.total_tokens || 0;
+    run.tokens = tokens;
     chat.totalTokens = (chat.totalTokens || 0) + tokens;
     chat.lastTurn = { durationMs: Math.round((r.duration_seconds || 0) * 1000), tokens, turns: r.num_turns };
     const replied = [...run.steps.values()].some((x) => x.role === 'assistant' && x.msg.text.trim());
@@ -747,11 +806,12 @@ function askApproval(chat, agent, from, tool, input, a) {
         id, tool, input, summary: a.summary,
         reasons: a.reasons.length ? a.reasons : ['This agent asks before every command'],
         agentName: agent.name,
+        noAlways: a.alwaysAsk || undefined,
         status: 'pending',
       },
     });
     const run = { who: from?.name, pending: new Set([id]) };
-    approvals.set(id, { chat, run, agent, ruleKey: a.ruleKey, message, resolve });
+    approvals.set(id, { chat, run, agent, ruleKey: a.ruleKey, alwaysAsk: a.alwaysAsk, message, resolve });
     status(chat, run, 'waiting for your approval');
     broadcast({ type: 'chat', chat: summary(chat) });
   });
@@ -768,7 +828,7 @@ function expireApprovals(chatId) {
 }
 
 // Runs exactly one approved command the way the agent asked, and captures its output.
-function runShell(chat, command, cwd, from) {
+function runShell(chat, command, cwd, from, env) {
   return new Promise((resolve) => {
     const win = process.platform === 'win32';
     // -EncodedCommand passes the command byte-for-byte, so quotes can't be re-interpreted.
@@ -778,7 +838,7 @@ function runShell(chat, command, cwd, from) {
     const args = win
       ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(preamble + command, 'utf16le').toString('base64')]
       : ['-lc', command];
-    const proc = spawn(win ? 'powershell.exe' : 'bash', args, { cwd, windowsHide: true });
+    const proc = spawn(win ? 'powershell.exe' : 'bash', args, { cwd, windowsHide: true, env: env || process.env });
     const run = { proc, who: from?.name, pending: new Set() };
     addRun(chat.id, run);
     status(chat, run, 'running a command…');
@@ -796,7 +856,7 @@ function runShell(chat, command, cwd, from) {
   });
 }
 
-async function handleBlocked(chat, agent, from, b, cwd) {
+async function handleBlocked(chat, agent, from, b, cwd, env) {
   if (b.kind === 'command') {
     const cmd = b.command;
     const card = b.msg;
@@ -806,7 +866,7 @@ async function handleBlocked(chat, agent, from, b, cwd) {
       return { text: `Command: ${cmd}\nNot run: this agent is in plan (read-only) mode.` };
     }
     const a = assess(SHELL_TOOL, { command: cmd }, cwd, os.homedir());
-    const remembered = (agent.allowRules || []).includes(a.ruleKey);
+    const remembered = isRemembered(agent, a);
     const mustAsk = (agent.permissionMode === 'ask' || a.risky) && !remembered;
     console.log(`[agy] ${agent.name}: ${cmd.slice(0, 80)} -> ${mustAsk ? 'ASK' : 'run'}${a.reasons.length ? ' (' + a.reasons.join('; ') + ')' : ''}`);
     if (mustAsk) {
@@ -819,7 +879,7 @@ async function handleBlocked(chat, agent, from, b, cwd) {
     }
     setCard({ status: 'running', result: undefined });
     const dir = b.cwd && fs.existsSync(b.cwd) ? b.cwd : cwd;
-    const r = await runShell(chat, cmd, dir, from);
+    const r = await runShell(chat, cmd, dir, from, env);
     setCard({ status: r.code === 0 ? 'done' : 'error', result: r.output || '(no output)' });
     return { text: `Command: ${cmd}\nExit code: ${r.code}\nOutput:\n${r.output || '(no output)'}` };
   }
@@ -833,7 +893,7 @@ async function handleBlocked(chat, agent, from, b, cwd) {
   return { text: `The user approved "${b.name}". Retry that action now.`, skip: true };
 }
 
-async function runAntigravity({ chat, agent, sessionId, systemPrompt, prompt, from }) {
+async function runAntigravity({ chat, agent, sessionId, systemPrompt, prompt, from, env }) {
   if (!AGY_BIN) {
     pushMessage(chat, { role: 'system', text: 'Antigravity CLI (agy) not found. Install Google Antigravity and its CLI, then restart ClaudeChat.', error: true });
     return { sessionId, ok: false };
@@ -848,29 +908,411 @@ async function runAntigravity({ chat, agent, sessionId, systemPrompt, prompt, fr
   if (!sessionId && systemPrompt) prompt = `[Instructions for this conversation]\n${systemPrompt}\n\n[Message]\n${prompt}`;
 
   let skip = false;
+  let tokens = 0;
   for (let round = 0; round < MAX_AGY_ROUNDS; round++) {
-    const r = await agyTurn({ chat, agent, sessionId, prompt, from, skipPermissions: skip, cwd });
+    const r = await agyTurn({ chat, agent, sessionId, prompt, from, skipPermissions: skip, cwd, env });
+    tokens += r.tokens || 0;
     if (r.sessionId) sessionId = r.sessionId;
     if (r.stopped || stopFlags.has(chat.id) || !r.ok || !r.blocked.length) {
       // agy marks blocked commands as finished; make clear they never ran.
       for (const b of r.blocked) {
         if (b.msg) patchMessage(chat, b.msg, { tool: { ...b.msg.tool, status: 'error', result: 'Not run: the turn ended before ClaudeChat could check it' } });
       }
-      return { sessionId, ok: r.ok, stopped: r.stopped };
+      return { sessionId, ok: r.ok, stopped: r.stopped, tokens };
     }
     skip = false;
     const notes = [];
     for (const b of r.blocked) {
-      const h = await handleBlocked(chat, agent, from, b, cwd);
-      if (stopFlags.has(chat.id)) return { sessionId, ok: false, stopped: true };
+      const h = await handleBlocked(chat, agent, from, b, cwd, env);
+      if (stopFlags.has(chat.id)) return { sessionId, ok: false, stopped: true, tokens };
       notes.push(h.text);
       if (h.skip) skip = true;
     }
     prompt = `[ClaudeChat] Your headless sandbox blocked ${notes.length === 1 ? 'an action' : 'some actions'}, so ClaudeChat checked and handled ${notes.length === 1 ? 'it' : 'them'} for you:\n\n${notes.join('\n\n---\n\n')}\n\nContinue the task from here.`;
   }
   pushMessage(chat, { role: 'system', text: `Paused after ${MAX_AGY_ROUNDS} rounds of blocked actions. Send a message to continue.` });
-  return { sessionId, ok: true };
+  return { sessionId, ok: true, tokens };
 }
+
+// ---------- running OpenAI Codex (codex app-server) ----------
+// Each turn starts `codex app-server` (JSON-RPC over stdio, see codex.js for why not
+// `codex exec`), opens or resumes the agent's thread and runs one turn on it. Codex asks
+// before commands and edits (approvalPolicy "untrusted"); ClaudeChat answers each request
+// with danger.js the way it answers Claude Code's permission prompts: safe ones are
+// accepted at once, risky ones get an Allow/Deny card. The thread id is the chat's sessionId.
+
+const CODEX_CLIENT = { clientInfo: { name: 'claudechat', title: 'ClaudeChat', version: APP_VERSION }, capabilities: null };
+
+function spawnCodex(cwd, env) {
+  // A bare npm shim (codex.cmd) only starts through a shell (quoted: the path may have spaces);
+  // the only argument is a fixed word.
+  const shell = /\.(cmd|bat)$/i.test(CODEX_BIN || '');
+  return spawn(shell ? `"${CODEX_BIN}"` : CODEX_BIN, ['app-server'], { cwd, windowsHide: true, env: env || process.env, shell });
+}
+
+// Starts a JSON-RPC session with a fresh app-server process.
+function codexSession(cwd, handlers, env) {
+  const proc = spawnCodex(cwd, env);
+  const rpc = codex.createRpc((m) => { if (proc.stdin.writable) proc.stdin.write(JSON.stringify(m) + '\n'); }, handlers);
+  proc.stdin.on('error', () => {});
+  proc.stdout.on('data', codex.lineReader((m) => { try { rpc.handle(m); } catch (e) { console.error('codex event error', e); } }));
+  proc.on('close', () => rpc.close('Codex exited'));
+  return { proc, rpc };
+}
+
+function loadCodexModels() {
+  if (!CODEX_BIN) return;
+  const { proc, rpc } = codexSession(os.homedir(), {
+    onRequest: (method, params, id) => rpc.respondError(id, 'unsupported'),
+    onNotification: () => {},
+  });
+  proc.on('error', () => {});
+  const timer = setTimeout(() => proc.kill(), 30000);
+  (async () => {
+    try {
+      await rpc.request('initialize', CODEX_CLIENT);
+      rpc.notify('initialized');
+      const list = codex.parseModelList(await rpc.request('model/list', {}));
+      if (list.length) codexModels = list;
+    } catch (e) {
+      console.log(`[codex] couldn't load models: ${e.message}`);
+    }
+    clearTimeout(timer);
+    proc.kill();
+  })();
+}
+
+function runCodex({ chat, agent, sessionId, systemPrompt, prompt, from, images, env }) {
+  if (!CODEX_BIN) {
+    pushMessage(chat, { role: 'system', text: 'Codex CLI not found. Install it (npm install -g @openai/codex), run `codex login` once, then restart ClaudeChat.', error: true });
+    return Promise.resolve({ sessionId, ok: false });
+  }
+  let cwd = agent.cwd;
+  if (!cwd || !fs.existsSync(cwd)) cwd = os.homedir();
+  return new Promise((resolve) => {
+    const run = {
+      agent, cwd, from, who: from?.name, sessionId, items: new Map(), pending: new Set(), stderr: '',
+      approvedCommands: new Set(), notes: [], followUps: 0,
+    };
+    const { proc, rpc } = codexSession(cwd, {
+      onRequest: (method, params, id) => onCodexRequest(chat, run, method, params, id),
+      onNotification: (method, params) => handleCodexEvent(chat, run, method, params),
+    }, env);
+    Object.assign(run, { proc, rpc });
+    addRun(chat.id, run);
+    status(chat, run, 'typing…');
+    proc.stderr.on('data', (d) => { run.stderr = (run.stderr + d.toString('utf8')).slice(-20000); });
+    proc.on('error', (err) => {
+      run.spawnError = true;
+      pushMessage(chat, { role: 'system', text: `Could not start the Codex CLI: ${err.message}`, error: true });
+    });
+    proc.on('close', (code) => {
+      run.exited = true;
+      clearTimeout(run.killTimer);
+      removeRun(chat.id, run);
+      for (const id of run.pending) {
+        const a = approvals.get(id);
+        approvals.delete(id);
+        if (a) patchMessage(chat, a.message, { approval: { ...a.message.approval, status: 'expired' } });
+      }
+      for (const e of run.items.values()) {
+        if (e.msg.streaming) patchMessage(chat, e.msg, { streaming: false });
+        if (e.msg.tool?.status === 'running') patchMessage(chat, e.msg, { tool: { ...e.msg.tool, status: 'error', result: run.stopped ? 'Stopped' : e.msg.tool.result } });
+      }
+      if (!run.gotResult && !run.stopped && !run.spawnError && !run.reported) {
+        const tail = run.stderr.trim().split('\n').filter((l) => !/websocket|bubblewrap|PATH aliases/i.test(l)).slice(-6).join('\n');
+        pushMessage(chat, { role: 'system', text: `${run.who ? run.who + ' ' : 'Codex '}exited (code ${code}).${tail ? '\n' + tail : ''}`, error: true });
+      }
+      save();
+      resolve({ sessionId: run.sessionId, ok: !!run.gotResult && !run.isError, stopped: !!run.stopped, tokens: run.tokens || 0 });
+    });
+
+    (async () => {
+      try {
+        await rpc.request('initialize', CODEX_CLIENT);
+        rpc.notify('initialized');
+        const { approvalPolicy, sandbox } = codex.codexPolicy(agent.permissionMode);
+        const instructions = [
+          systemPrompt,
+          agent.permissionMode === 'plan' ? 'You are in plan mode: the workspace is read-only. Investigate and propose a plan; do not try to change files.' : '',
+        ].filter(Boolean).join('\n\n');
+        const params = { model: agent.model, cwd, approvalPolicy, sandbox, developerInstructions: instructions || null };
+        let thread = null;
+        if (sessionId) {
+          try {
+            thread = (await rpc.request('thread/resume', { threadId: sessionId, ...params })).thread;
+          } catch (e) {
+            pushMessage(chat, { role: 'system', text: `${run.who ? run.who + ': ' : ''}Couldn't resume the Codex thread (${e.message}), so this starts a new one.` });
+          }
+        }
+        if (!thread) thread = (await rpc.request('thread/start', params)).thread;
+        run.sessionId = thread.id;
+        const input = [{ type: 'text', text: prompt, text_elements: [] }, ...(images || []).map((p) => ({ type: 'localImage', path: p }))];
+        const t = await rpc.request('turn/start', { threadId: run.sessionId, input, effort: codex.codexEffort(codexModels, agent) });
+        run.turnId = t?.turn?.id || run.turnId;
+      } catch (e) {
+        // If Codex already exited, the close handler reported it (with its stderr).
+        if (!run.stopped && !run.gotResult && !run.exited) {
+          run.reported = true;
+          const hint = run.sessionId ? '' : '\nClaudeChat needs a recent Codex CLI (npm install -g @openai/codex@latest).';
+          pushMessage(chat, { role: 'system', text: `${run.who ? run.who + ': ' : ''}Codex error: ${e.message}${hint}`, error: true });
+        }
+        proc.kill();
+      }
+    })();
+  });
+}
+
+function endCodexRun(run) {
+  try { run.proc.stdin.end(); } catch {}
+  run.killTimer = setTimeout(() => { try { run.proc.kill(); } catch {} }, 1500);
+}
+
+function handleCodexEvent(chat, run, method, p) {
+  // Sub-agent threads Codex may spawn stay out of the chat; only the agent's own thread shows.
+  if (p.threadId && run.sessionId && p.threadId !== run.sessionId) return;
+  switch (method) {
+    case 'thread/started':
+      if (!run.sessionId && p.thread?.id) run.sessionId = p.thread.id;
+      return;
+    case 'turn/started':
+      run.turnId = p.turn?.id || run.turnId;
+      return status(chat, run, 'thinking…');
+    case 'item/started':
+    case 'item/completed':
+      return onCodexItem(chat, run, p.item, method === 'item/completed');
+    case 'item/agentMessage/delta': {
+      let e = run.items.get(p.itemId);
+      if (!e) {
+        e = { item: { type: 'agentMessage', id: p.itemId }, msg: pushMessage(chat, { role: 'assistant', text: '', streaming: true, from: run.from }) };
+        run.items.set(p.itemId, e);
+      }
+      e.msg.text += p.delta || '';
+      broadcast({ type: 'delta', chatId: chat.id, messageId: e.msg.id, text: p.delta || '' });
+      return status(chat, run, 'typing…');
+    }
+    case 'item/reasoning/summaryTextDelta':
+    case 'item/reasoning/textDelta':
+      return status(chat, run, 'thinking…');
+    case 'thread/tokenUsage/updated': {
+      // total is the whole thread's; this turn's share is what it grew by since the turn began.
+      const total = p.tokenUsage?.total?.totalTokens || 0;
+      const last = p.tokenUsage?.last?.totalTokens || 0;
+      if (run.tokenBase === undefined) run.tokenBase = total - last;
+      run.tokens = Math.max(0, total - run.tokenBase);
+      return;
+    }
+    case 'serverRequest/resolved':
+      // Codex withdrew a request (e.g. the turn was interrupted): its card can't be answered any more.
+      for (const [id, a] of approvals) if (a.run === run && a.requestId === p.requestId) {
+        approvals.delete(id);
+        run.pending.delete(id);
+        patchMessage(chat, a.message, { approval: { ...a.message.approval, status: 'expired' } });
+      }
+      return;
+    case 'error':
+      if (p.willRetry) return status(chat, run, 'reconnecting…');
+      run.lastError = p.error?.message || run.lastError;
+      return;
+    case 'turn/completed':
+      return onCodexTurnDone(chat, run, p.turn || {});
+  }
+}
+
+function onCodexItem(chat, run, item, done) {
+  if (!item?.id) return;
+  if (item.type === 'agentMessage') {
+    let e = run.items.get(item.id);
+    if (!e) {
+      if (done && !item.text?.trim()) return;
+      e = { item, msg: pushMessage(chat, { role: 'assistant', text: item.text || '', streaming: !done, from: run.from }) };
+      run.items.set(item.id, e);
+      status(chat, run, 'typing…');
+    }
+    e.item = item;
+    if (done) patchMessage(chat, e.msg, { text: String(item.text ?? e.msg.text).replace(/\s+$/, ''), streaming: false });
+    return;
+  }
+  if (item.type === 'reasoning') return status(chat, run, 'thinking…');
+  const card = codex.toolCard(item, SHELL_TOOL);
+  if (!card) return;
+  let e = run.items.get(item.id);
+  if (!e) {
+    e = { item, msg: pushMessage(chat, { role: 'tool', from: run.from, tool: { id: item.id, name: card.name, input: card.input, status: card.status, result: card.result } }) };
+    run.items.set(item.id, e);
+    if (!done) status(chat, run, `using ${card.name}…`);
+    return;
+  }
+  e.item = item;
+  if (done) patchMessage(chat, e.msg, { tool: { ...e.msg.tool, input: card.input, status: card.status, result: card.result } });
+}
+
+function onCodexTurnDone(chat, run, turn) {
+  // A note you wrote when denying something that Codex couldn't take mid-turn goes in as the next turn.
+  if (turn.status === 'completed' && run.notes.length && run.followUps < 3 && !stopFlags.has(chat.id)) {
+    const text = run.notes.splice(0).join('\n\n');
+    run.followUps++;
+    run.rpc.request('turn/start', { threadId: run.sessionId, input: [{ type: 'text', text, text_elements: [] }], effort: codex.codexEffort(codexModels, run.agent) })
+      .then((t) => { run.turnId = t?.turn?.id || run.turnId; })
+      .catch(() => { run.gotResult = true; endCodexRun(run); });
+    return;
+  }
+  run.gotResult = true;
+  run.isError = turn.status === 'failed';
+  if (turn.status === 'interrupted') run.stopped = true;
+  chat.totalTokens = (chat.totalTokens || 0) + (run.tokens || 0);
+  chat.lastTurn = { durationMs: turn.durationMs, tokens: run.tokens || 0, turns: 1 + run.followUps };
+  if (run.isError) {
+    let msg = turn.error?.message || run.lastError || 'Codex reported an error';
+    if (/401|unauthori[sz]ed|not logged in|login|api key/i.test(msg)) msg += '\nRun `codex login` in a terminal once, then try again.';
+    pushMessage(chat, { role: 'system', text: `${run.who ? run.who + ': ' : ''}Error: ${msg}`, error: true });
+  }
+  endCodexRun(run);
+}
+
+// Codex asks before a command or edit: decide with danger.js, like Claude Code's prompts.
+function onCodexRequest(chat, run, method, params, requestId) {
+  const agent = run.agent;
+  const desc = codex.describeApproval(method, params, { get: (id) => run.items.get(id)?.item }, SHELL_TOOL);
+  if (!desc) {
+    console.log(`[codex] ${agent.name}: unsupported request ${method}`);
+    return run.rpc.respondError(requestId, `ClaudeChat can't answer ${method}`);
+  }
+  const respond = (decision) => run.rpc.respond(requestId, { decision });
+  const a = codex.assessApproval(desc, assess, run.cwd, os.homedir());
+  const isCommand = desc.tool !== 'Edit';
+  // An approved command Codex retries outside its sandbox asks again; don't ask twice.
+  const remembered = isRemembered(agent, a) || (isCommand && run.approvedCommands.has(desc.input.command));
+  const card = run.items.get(params.itemId)?.msg;
+  if (agent.permissionMode === 'acceptEdits' && !a.alwaysAsk) {
+    // Edits go through; risky commands are refused without asking.
+    const ok = !isCommand || !a.risky || remembered;
+    console.log(`[codex] ${agent.name}: ${a.summary.slice(0, 80)} -> ${ok ? 'accept' : 'decline'} (accept-edits mode)`);
+    if (!ok) pushMessage(chat, { role: 'system', text: `Blocked ${run.who || 'Codex'}'s command (${a.reasons.join('; ')}). "Accept edits" mode refuses risky commands; pick "Ask when risky" to approve them yourself.` });
+    return respond(ok ? 'accept' : 'decline');
+  }
+  const mustAsk = (agent.permissionMode === 'ask' || a.risky) && !remembered;
+  console.log(`[codex] ${agent.name}: ${a.summary.slice(0, 80)} -> ${mustAsk ? 'ASK' : 'accept'}${a.reasons.length ? ' (' + a.reasons.join('; ') + ')' : ''}`);
+  if (!mustAsk) return respond('accept');
+
+  const id = uid();
+  const message = pushMessage(chat, {
+    role: 'approval',
+    from: run.from,
+    approval: {
+      id,
+      tool: desc.tool,
+      input: desc.input,
+      summary: a.summary,
+      reasons: a.reasons.length ? a.reasons : ['This agent asks before every change'],
+      agentName: agent.name,
+      noAlways: a.alwaysAsk || undefined,
+      status: 'pending',
+    },
+  });
+  if (card) patchMessage(chat, card, { tool: { ...card.tool, result: 'Waiting for your approval…' } });
+  approvals.set(id, {
+    chat, run, agent, requestId, ruleKey: a.ruleKey, alwaysAsk: a.alwaysAsk, message,
+    answer: (allowed, note) => {
+      if (allowed && isCommand) run.approvedCommands.add(desc.input.command);
+      if (card) patchMessage(chat, card, { tool: { ...card.tool, result: allowed ? undefined : 'Not run: you denied it' } });
+      respond(allowed ? 'accept' : 'decline');
+      if (allowed || !note) return;
+      // Codex's decline carries no message, so the note is steered into the running turn.
+      const text = `[ClaudeChat] The user denied ${isCommand ? `the command \`${desc.input.command}\`` : `the edit to ${desc.input.file_path}`} and said: ${note}`;
+      run.rpc.request('turn/steer', { threadId: run.sessionId, expectedTurnId: run.turnId, input: [{ type: 'text', text, text_elements: [] }] })
+        .catch(() => run.notes.push(text));
+    },
+  });
+  run.pending.add(id);
+  status(chat, run, 'waiting for your approval');
+  broadcast({ type: 'chat', chat: summary(chat) });
+}
+
+// ---------- YouTube (agents upload videos / edit the channel, you approve each time) ----------
+// Agents call ClaudeChat's local API from a shell command; the request carries the agent's
+// private ID (CLAUDECHAT_AGENT), so the Allow/Deny card lands in the right chat. Every action
+// asks: there is no "Always allow" for these. The work itself is done by youtube.js through
+// YouTube's official API with the user's own Google login.
+
+const agentKeys = new Map(); // CLAUDECHAT_AGENT value -> { chat, agent, from } while a turn runs
+const ytJobs = new Map(); // job id -> { id, key, status: waiting|working|done|denied|error, result, waiters }
+
+const YOUTUBE_HOWTO = [
+  'YouTube: the user connected their YouTube channel to ClaudeChat. To upload a video or change the channel name/description, call ClaudeChat\'s local API. Never post any other way. The user approves every action in the chat.',
+  'POST $CLAUDECHAT_URL/api/youtube/agent with header "X-ClaudeChat-Agent: <the CLAUDECHAT_AGENT environment variable>" and a JSON body, one of:',
+  '  {"action":"upload","file":"<absolute path to the video>","title":"...","description":"...","privacy":"private|unlisted|public","tags":["..."]}',
+  '  {"action":"channel","title":"<new channel name>","description":"<new channel description>"}  (either field may be left out)',
+  'PowerShell: Invoke-RestMethod -Method Post -Uri "$env:CLAUDECHAT_URL/api/youtube/agent" -Headers @{ "X-ClaudeChat-Agent" = $env:CLAUDECHAT_AGENT } -ContentType "application/json; charset=utf-8" -TimeoutSec 600 -Body (@{ action = "upload"; file = "C:\\path\\video.mp4"; title = "My video"; privacy = "private" } | ConvertTo-Json)',
+  'Bash: curl -s -X POST "$CLAUDECHAT_URL/api/youtube/agent" -H "X-ClaudeChat-Agent: $CLAUDECHAT_AGENT" -H "Content-Type: application/json" -d \'{"action":"upload","file":"/path/video.mp4","title":"My video","privacy":"private"}\'',
+  'The reply is JSON with "status": "done" (with the result, e.g. the video URL), "denied" (the user said no; respect it and don\'t retry), "error", or "waiting"/"working". For "waiting" or "working", GET $CLAUDECHAT_URL/api/youtube/agent/<id> with the same header to keep waiting. Use privacy "private" unless the user asked for something else.',
+].join('\n');
+
+function finishYtJob(job, status, result) {
+  job.status = status;
+  job.result = result;
+  for (const w of job.waiters.splice(0)) w();
+}
+
+// The job as the agent sees it, after waiting up to `ms` for it to finish.
+async function ytJobReply(job, ms = 90000) {
+  if (job.status === 'waiting' || job.status === 'working') {
+    await new Promise((resolve) => {
+      const t = setTimeout(resolve, ms);
+      job.waiters.push(() => { clearTimeout(t); resolve(); });
+    });
+  }
+  return { id: job.id, status: job.status, ...(job.result || {}) };
+}
+
+function startYtJob(key, body) {
+  const who = agentKeys.get(key);
+  const { chat, agent, from } = who;
+  const action = body.action;
+  let summary, reasons, tool, run;
+  if (action === 'upload') {
+    const u = yt.checkUpload(body);
+    tool = 'YouTube upload';
+    summary = `Upload “${u.title}” to ${yt.status().channel?.title || 'your channel'} (${u.privacy})\nFile: ${u.file} (${(u.size / 1048576).toFixed(1)} MB)${u.description ? `\nDescription: ${u.description.slice(0, 400)}${u.description.length > 400 ? '…' : ''}` : ''}${u.tags.length ? `\nTags: ${u.tags.join(', ')}` : ''}`;
+    reasons = [`Posts a video to your YouTube channel${u.privacy === 'public' ? ', publicly' : ''}`, 'YouTube actions always ask; they can’t be always-allowed'];
+    run = async () => {
+      const r = await yt.upload(u);
+      pushMessage(chat, { role: 'system', text: `📺 Uploaded to YouTube (${r.privacy}): ${r.url}` });
+      return r;
+    };
+  } else if (action === 'channel') {
+    const change = yt.checkChannel(body);
+    tool = 'YouTube channel';
+    summary = [change.title !== undefined ? `New channel name: ${change.title}` : '', change.description !== undefined ? `New description:\n${change.description}` : ''].filter(Boolean).join('\n');
+    reasons = ['Changes your YouTube channel', 'YouTube actions always ask; they can’t be always-allowed'];
+    run = async () => {
+      const r = await yt.updateChannel(change);
+      const missed = r.notApplied.length ? ` YouTube didn't apply the ${r.notApplied.join(' and ')} change; it may only allow that in YouTube Studio.` : '';
+      pushMessage(chat, { role: 'system', text: `📺 YouTube channel updated.${missed}` });
+      return r;
+    };
+  } else {
+    throw new Error('action must be "upload" or "channel"');
+  }
+  const job = { id: uid(), key, status: 'waiting', result: null, waiters: [] };
+  ytJobs.set(job.id, job);
+  askApproval(chat, agent, from, tool, { action, ...body }, { summary, reasons, ruleKey: 'youtube', alwaysAsk: true }).then(async ({ allowed, note }) => {
+    if (!allowed) return finishYtJob(job, 'denied', { note: note || undefined, message: 'The user denied this. Do not retry it.' });
+    job.status = 'working';
+    try {
+      finishYtJob(job, 'done', await run());
+    } catch (e) {
+      pushMessage(chat, { role: 'system', text: `YouTube: ${e.message}`, error: true });
+      finishYtJob(job, 'error', { error: e.message });
+    }
+    save();
+  });
+  setTimeout(() => ytJobs.delete(job.id), 6 * 3600e3).unref();
+  return job;
+}
+
+const ytPage = (title, text) => `<!doctype html><meta charset="utf-8"><title>${title}</title><body style="font:16px system-ui;padding:40px;text-align:center"><h2>${title}</h2><p>${text}</p></body>`;
+const escHtml = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // ---------- turns ----------
 
@@ -883,8 +1325,10 @@ function promptFor(m) {
   return text;
 }
 
+const imagesOf = (m) => (m.attachments || []).filter((a) => /^image\//.test(a.type || '') && a.path).map((a) => a.path);
+
 async function runAgentTurn(chat, userMsg) {
-  const r = await runOnce({ chat, agent: chat, sessionId: chat.sessionId, systemPrompt: chat.systemPrompt, prompt: promptFor(userMsg) });
+  const r = await runOnce({ chat, agent: chat, sessionId: chat.sessionId, systemPrompt: chat.systemPrompt, prompt: promptFor(userMsg), images: imagesOf(userMsg) });
   if (r.sessionId) chat.sessionId = r.sessionId;
 }
 
@@ -1056,21 +1500,27 @@ function applySettings(chat, body) {
   if (typeof body.name === 'string' && body.name.trim()) chat.name = body.name.trim().slice(0, 60);
   if (typeof body.avatar === 'string' && body.avatar.trim()) chat.avatar = body.avatar.trim().slice(0, 8);
   // Switching provider starts a fresh conversation on the new CLI, with that provider's default model.
-  if ((body.provider === 'claude' || body.provider === 'antigravity') && body.provider !== chat.provider) {
+  if (RUNNERS[body.provider] && body.provider !== chat.provider) {
     chat.provider = body.provider;
     chat.sessionId = null;
-    chat.model = chat.provider === 'antigravity' ? (agyModels[0]?.id || 'gemini-3.8-flash') : 'claude-opus-5-5';
-    chat.effort = chat.provider === 'antigravity' ? 'medium' : 'high';
+    if (chat.provider === 'antigravity') { chat.model = agyModels[0]?.id || 'gemini-3.8-flash'; chat.effort = 'medium'; }
+    else if (chat.provider === 'codex') { chat.model = codexDefaultModel(); chat.effort = findCodexModel(chat.model)?.defaultEffort || 'medium'; }
+    else { chat.model = 'claude-opus-5-5'; chat.effort = 'high'; }
   }
+  const modelId = typeof body.model === 'string' && /^[\w.-]+$/.test(body.model) ? body.model : null;
   if (chat.provider === 'antigravity') {
-    if (typeof body.model === 'string' && /^[\w.-]+$/.test(body.model) && (findAgyModel(body.model) || !agyModels.length)) chat.model = body.model;
+    if (modelId && (findAgyModel(modelId) || !agyModels.length)) chat.model = modelId;
+  } else if (chat.provider === 'codex') {
+    if (modelId && (findCodexModel(modelId) || !codexModels.length)) chat.model = modelId;
   } else if (MODELS[body.model]) chat.model = body.model;
-  if (EFFORTS.includes(body.effort)) chat.effort = body.effort;
+  // Codex models have their own effort levels (e.g. "ultra"); codex.js falls back to the model's default.
+  if (EFFORTS.includes(body.effort) || (chat.provider === 'codex' && typeof body.effort === 'string' && /^[a-z]{2,12}$/.test(body.effort))) chat.effort = body.effort;
   if (PERMISSION_MODES.includes(body.permissionMode)) chat.permissionMode = body.permissionMode;
   if (typeof body.cwd === 'string') chat.cwd = body.cwd.trim();
   if (typeof body.systemPrompt === 'string') chat.systemPrompt = body.systemPrompt.slice(0, 8000);
   if (typeof body.pinned === 'boolean') chat.pinned = body.pinned;
   if (typeof body.muted === 'boolean') chat.muted = body.muted;
+  if (typeof body.archived === 'boolean') chat.archived = body.archived;
   if (typeof body.fullAccess === 'boolean') chat.fullAccess = body.fullAccess;
   if (Array.isArray(body.members)) chat.members = body.members.filter((id) => findChat(id)?.type === 'agent');
   if (typeof body.teamTalk === 'boolean') chat.teamTalk = body.teamTalk;
@@ -1192,6 +1642,60 @@ const server = http.createServer(async (req, res) => {
       return serveFile(res, file);
     }
 
+    // ----- YouTube -----
+    if (route === 'youtube') {
+      const sub = parts[2];
+      if (!sub && req.method === 'GET') return json(res, 200, yt.status());
+      if (sub === 'config' && req.method === 'POST') {
+        const body = await readBody(req);
+        yt.configure(body.clientId, body.clientSecret);
+        broadcast({ type: 'youtube' });
+        return json(res, 200, yt.status());
+      }
+      if (sub === 'connect' && req.method === 'POST') {
+        return json(res, 200, { url: yt.authUrl(`http://127.0.0.1:${PORT}/api/youtube/callback`) });
+      }
+      if (sub === 'callback' && req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        if (url.searchParams.get('error')) return res.end(ytPage('Not connected', `Google said: ${escHtml(url.searchParams.get('error'))}. You can close this tab.`));
+        try {
+          const ch = await yt.finishAuth(url.searchParams.get('code'), url.searchParams.get('state'));
+          broadcast({ type: 'youtube' });
+          return res.end(ytPage('YouTube connected', `ClaudeChat can now ask you before uploading to <b>${escHtml(ch.title)}</b>. You can close this tab.`));
+        } catch (e) {
+          return res.end(ytPage('Not connected', escHtml(e.message)));
+        }
+      }
+      if (sub === 'disconnect' && req.method === 'POST') {
+        yt.disconnect();
+        broadcast({ type: 'youtube' });
+        return json(res, 200, yt.status());
+      }
+      // Agents: POST /api/youtube/agent { action, ... }, GET /api/youtube/agent/:job
+      if (sub === 'agent') {
+        const key = String(req.headers['x-claudechat-agent'] || '');
+        if (!agentKeys.has(key)) return json(res, 403, { status: 'error', error: 'Unknown or expired X-ClaudeChat-Agent. Use the CLAUDECHAT_AGENT environment variable of this turn.' });
+        if (!yt.status().connected) return json(res, 409, { status: 'error', error: 'YouTube is not connected. Ask the user to connect it in ClaudeChat (🌙 menu → YouTube).' });
+        if (!parts[3] && req.method === 'POST') {
+          let job;
+          try { job = startYtJob(key, await readBody(req)); } catch (e) { return json(res, 400, { status: 'error', error: e.message }); }
+          return json(res, 200, await ytJobReply(job));
+        }
+        const job = ytJobs.get(parts[3]);
+        if (job && job.key === key && req.method === 'GET') return json(res, 200, await ytJobReply(job));
+        return json(res, 404, { status: 'error', error: 'No such request' });
+      }
+    }
+
+    // ----- starred messages, across all chats (newest first) -----
+    if (route === 'starred' && req.method === 'GET') {
+      const list = [];
+      for (const c of db.chats) for (const m of c.messages) {
+        if (m.starred) list.push({ chatId: c.id, chatName: c.name, avatar: c.avatar, color: c.color, message: { id: m.id, role: m.role, text: m.text, ts: m.ts, from: m.from } });
+      }
+      return json(res, 200, list.sort((a, b) => b.message.ts - a.message.ts).slice(0, 500));
+    }
+
     // ----- broadcast -----
     if (route === 'broadcast' && req.method === 'POST') {
       const body = await readBody(req);
@@ -1228,7 +1732,7 @@ const server = http.createServer(async (req, res) => {
           provider: 'claude',
           model: 'claude-opus-5-5',
           effort: 'high',
-          permissionMode: 'smart',
+          permissionMode: 'ask',
           allowRules: [],
           fullAccess: true,
           cwd: isGroup ? '' : os.homedir(), // groups: '' = each agent works in its own folder
@@ -1275,6 +1779,17 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, summary(chat));
       }
 
+      // A new agent with the same settings (no messages, no memory).
+      if (sub === 'duplicate' && req.method === 'POST') {
+        const keep = ['type', 'avatar', 'color', 'provider', 'model', 'effort', 'permissionMode', 'allowRules', 'fullAccess', 'cwd', 'teamTalk', 'parallel', 'maxTurns', 'systemPrompt', 'members'];
+        const copy = { id: uid(), name: `${chat.name} (copy)`.slice(0, 60), sessionId: null, memberSessions: {}, memberCursor: {}, createdAt: now(), updatedAt: now(), totalCost: 0, pinned: false, muted: false, messages: [] };
+        for (const k of keep) if (chat[k] !== undefined) copy[k] = JSON.parse(JSON.stringify(chat[k]));
+        db.chats.push(copy);
+        save();
+        broadcast({ type: 'chat', chat: summary(copy) });
+        return json(res, 201, summary(copy));
+      }
+
       if (!sub && req.method === 'DELETE') {
         stopFlags.add(chat.id);
         queues.delete(chat.id);
@@ -1296,6 +1811,16 @@ const server = http.createServer(async (req, res) => {
         enqueue(chat, { text, attachments, replyTo });
         save();
         return json(res, 202, { ok: true });
+      }
+
+      // PATCH /api/chats/:id/messages/:messageId  { starred }
+      if (sub === 'messages' && parts[4] && req.method === 'PATCH') {
+        const body = await readBody(req);
+        const m = chat.messages.find((x) => x.id === parts[4]);
+        if (!m) return json(res, 404, { error: 'Message not found' });
+        if (typeof body.starred === 'boolean') patchMessage(chat, m, { starred: body.starred || undefined });
+        save();
+        return json(res, 200, { ok: true });
       }
 
       // POST /api/chats/:id/approvals/:approvalId  { decision: allow|always|deny, note? }
@@ -1423,10 +1948,11 @@ server.on('error', (e) => {
 });
 
 loadAgyModels();
+loadCodexModels();
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`ClaudeChat running at ${APP_URL}`);
-  console.log(`Claude Code: ${CLAUDE_BIN} | Antigravity: ${AGY_BIN || 'not installed'}`);
+  console.log(`Claude Code: ${CLAUDE_BIN} | Antigravity: ${AGY_BIN || 'not installed'} | Codex: ${CODEX_BIN || 'not installed'}`);
   console.log(`Chats are saved in ${DATA_DIR}`);
   if (APP_MODE) {
     process.title = 'ClaudeChat';

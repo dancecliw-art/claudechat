@@ -34,6 +34,22 @@ const SENSITIVE = [
   [/^[a-z]:\\windows(\\|$)|\\System32\\|^[a-z]:\\Program Files|^[a-z]:\\ProgramData|^\/(etc|usr|bin|sbin|boot|System)\//i, 'Touches system files'],
 ];
 
+// Posting videos online (YouTube, TikTok…) always needs a fresh OK: no "Always allow".
+const VIDEO_FILE = /\.(mp4|mov|m4v|webm|mkv|avi|wmv|flv|3gp)\b/i;
+const VIDEO_SITE = /youtube|youtu\.be|tiktok|bytedance|douyin/i;
+const SENDS_DATA = /(^|\s)(-F|--form|-T|--upload-file|--data-binary|-InFile|-Form)(\s|=|$)|\b(upload|publish|videos\.insert)/i;
+const UPLOAD_TOOLS = /\b(youtube[-_]?upload|yt[-_]?upload|tiktok[-_]?upload(er)?|tiktokautouploader)\b/i;
+const VIDEO_UPLOAD = 'Uploads a video online (YouTube, TikTok…). This always asks; it can\'t be always-allowed.';
+// ClaudeChat's own YouTube API asks you itself (with no "Always allow"), so a plain call to it
+// isn't flagged twice. Anything that also posts a file or names a video site still is.
+const OWN_YT_API = /\/api\/youtube\/agent\b/;
+const POSTS_FILE = /(^|\s)(-F|--form|-T|--upload-file|--data-binary|-InFile|-Form)(\s|=|$)|youtube\.com|youtu\.be|googleapis|tiktok/i;
+function isVideoUpload(text) {
+  if (OWN_YT_API.test(text) && !POSTS_FILE.test(text.replace(/\$?\{?env:CLAUDECHAT_URL\}?|\$\{?CLAUDECHAT_URL\}?/gi, ''))) return false;
+  if (UPLOAD_TOOLS.test(text)) return true;
+  return (VIDEO_SITE.test(text) || VIDEO_FILE.test(text)) && SENDS_DATA.test(text);
+}
+
 const EDIT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 const COMMAND_TOOLS = new Set(['Bash', 'PowerShell']);
 
@@ -61,12 +77,14 @@ function expandHome(p, home) {
 }
 
 /**
- * @returns {{ risky: boolean, reasons: string[], summary: string, ruleKey: string }}
+ * @returns {{ risky: boolean, reasons: string[], summary: string, ruleKey: string, alwaysAsk: boolean }}
+ * alwaysAsk: the user must approve this every time; "Always allow" rules never cover it.
  */
 function assess(toolName, input, cwd, home) {
   const reasons = [];
   let summary = '';
   let ruleKey = toolName;
+  let alwaysAsk = false;
 
   if (COMMAND_TOOLS.has(toolName)) {
     const cmd = String(input?.command || '');
@@ -74,6 +92,8 @@ function assess(toolName, input, cwd, home) {
     // Ignore quoted text (commit messages, echo strings) when looking for dangerous verbs.
     const bare = cmd.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""');
     for (const [re, why] of COMMAND_RULES) if (re.test(bare)) reasons.push(why);
+    // Checked on the full command: the URL or file name is usually quoted.
+    if (isVideoUpload(cmd)) { reasons.unshift(VIDEO_UPLOAD); alwaysAsk = true; }
     for (const [re, why] of SENSITIVE) if (re.test(cmd)) reasons.push(why);
     const outside = pathsIn(cmd).map((p) => expandHome(p, home)).filter((p) => !isInside(p, cwd));
     if (outside.length && WRITE_VERBS.test(cmd)) reasons.push(`Changes files and uses a path outside the working folder (${outside[0]})`);
@@ -88,9 +108,14 @@ function assess(toolName, input, cwd, home) {
   } else {
     summary = JSON.stringify(input || {}).slice(0, 300);
     ruleKey = `${toolName}:*`;
+    // MCP or other tools that post to YouTube/TikTok (e.g. mcp__youtube__upload_video).
+    if ((VIDEO_SITE.test(toolName) && /upload|publish|post|insert/i.test(toolName)) || UPLOAD_TOOLS.test(toolName) || (VIDEO_SITE.test(toolName + summary) && VIDEO_FILE.test(summary) && /upload|publish|post/i.test(toolName))) {
+      reasons.push(VIDEO_UPLOAD);
+      alwaysAsk = true;
+    }
   }
 
-  return { risky: reasons.length > 0, reasons: [...new Set(reasons)], summary, ruleKey };
+  return { risky: reasons.length > 0, reasons: [...new Set(reasons)], summary, ruleKey, alwaysAsk };
 }
 
 module.exports = { assess };

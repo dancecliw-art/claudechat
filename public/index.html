@@ -21,6 +21,9 @@
         <span>ClaudeChat</span>
       </div>
       <div class="head-actions">
+        <button class="icon-btn" id="btnStarred" title="Starred messages" aria-label="Starred messages">
+          <svg viewBox="0 0 24 24"><path d="M12 17.3 18.2 21l-1.6-7L22 9.2l-7.2-.6L12 2 9.2 8.6 2 9.2 7.4 14l-1.6 7z"/></svg>
+        </button>
         <button class="icon-btn" id="btnBroadcast" title="Broadcast to several agents" aria-label="Broadcast">
           <svg viewBox="0 0 24 24"><path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1zm13.5 1A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4zM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6z"/></svg>
         </button>
@@ -30,16 +33,17 @@
         <button class="icon-btn" id="btnNew" title="New agent" aria-label="New agent">
           <svg viewBox="0 0 24 24"><path d="M19 3H5a2 2 0 0 0-2 2v14l4-4h12a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm-3 7h-3v3h-2v-3H8V8h3V5h2v3h3v2z"/></svg>
         </button>
-        <button class="icon-btn" id="btnTheme" title="Toggle theme" aria-label="Toggle theme">
+        <button class="icon-btn" id="btnTheme" title="Theme" aria-label="Choose a theme" aria-haspopup="true">
           <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9c0-.46-.04-.92-.1-1.36a5.4 5.4 0 0 1-4.4 2.26 5.4 5.4 0 0 1-3.14-9.8A9 9 0 0 0 12 3z"/></svg>
         </button>
+        <div class="popover theme-pop" id="themePop" hidden></div>
       </div>
     </header>
 
     <div class="search-wrap">
       <div class="search">
         <svg viewBox="0 0 24 24"><path d="M15.5 14h-.8l-.3-.3A6.5 6.5 0 1 0 9.5 16a6.5 6.5 0 0 0 4.2-1.6l.3.3v.8l5 5 1.5-1.5-5-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
-        <input id="search" placeholder="Search agents" autocomplete="off">
+        <input id="search" placeholder="Search agents · Ctrl+K to jump" autocomplete="off">
       </div>
       <div class="chips" id="chips">
         <button class="chip active" data-filter="all">All</button>
@@ -47,6 +51,10 @@
         <button class="chip" data-filter="unread">Unread</button>
         <button class="chip" data-filter="groups">Groups</button>
         <button class="chip" data-filter="pinned">Pinned</button>
+        <button class="chip" data-filter="p:claude">Claude</button>
+        <button class="chip" data-filter="p:codex">Codex</button>
+        <button class="chip" data-filter="p:antigravity">Antigravity</button>
+        <button class="chip" data-filter="archived">Archived</button>
       </div>
     </div>
 
@@ -91,7 +99,7 @@
     <div class="empty" id="empty">
       <div class="empty-art">✳</div>
       <h1>ClaudeChat</h1>
-      <p>Message all your Claude Code agents in one place. Each chat is its own agent with its own folder, model and memory. Put several in a group and they talk to each other.</p>
+      <p>Message all your Claude Code, Codex and Antigravity agents in one place. Each chat is its own agent with its own folder, model and memory. Put several in a group and they talk to each other.</p>
       <div class="empty-actions">
         <button class="primary" id="btnNewEmpty">New agent</button>
         <button class="ghost" id="btnGroupEmpty">New group</button>
@@ -126,6 +134,9 @@
           </div>
         </div>
 
+        <button class="icon-btn" id="btnFind" title="Search this chat (Ctrl+F)" aria-label="Search this chat">
+          <svg viewBox="0 0 24 24"><path d="M15.5 14h-.8l-.3-.3A6.5 6.5 0 1 0 9.5 16a6.5 6.5 0 0 0 4.2-1.6l.3.3v.8l5 5 1.5-1.5-5-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
+        </button>
         <button class="icon-btn" id="btnStopHead" title="Stop" aria-label="Stop" hidden>
           <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
         </button>
@@ -134,8 +145,23 @@
         </button>
       </header>
 
+      <div class="find-bar" id="findBar" hidden>
+        <input id="findInput" placeholder="Search this chat" autocomplete="off" spellcheck="false">
+        <span class="find-count" id="findCount"></span>
+        <button class="icon-btn sm" id="findPrev" title="Older match (Enter)" aria-label="Older match">
+          <svg viewBox="0 0 24 24"><path d="M7.4 15.4 12 10.8l4.6 4.6L18 14l-6-6-6 6z"/></svg>
+        </button>
+        <button class="icon-btn sm" id="findNext" title="Newer match (Shift+Enter)" aria-label="Newer match">
+          <svg viewBox="0 0 24 24"><path d="M7.4 8.6 12 13.2l4.6-4.6L18 10l-6 6-6-6z"/></svg>
+        </button>
+        <button class="icon-btn sm" id="findClose" title="Close (Esc)" aria-label="Close search">✕</button>
+      </div>
+
       <div class="messages" id="messages"></div>
       <div class="drop-hint" id="dropHint" hidden>Drop files to attach</div>
+      <button type="button" class="jump" id="btnJump" title="Jump to latest" aria-label="Jump to latest" hidden>
+        <svg viewBox="0 0 24 24"><path d="M7.4 8.6 12 13.2l4.6-4.6L18 10l-6 6-6-6z"/></svg><span id="jumpCount" hidden></span>
+      </button>
 
       <footer class="composer-wrap">
         <div class="reply-bar" id="replyBar" hidden>
@@ -144,6 +170,7 @@
         </div>
         <div class="attach-strip" id="attachStrip" hidden></div>
         <div class="mention-pop" id="mentionPop" hidden></div>
+        <div class="mention-pop slash-pop" id="slashPop" hidden></div>
         <div class="composer">
           <button class="icon-btn" id="btnAttach" title="Attach files" aria-label="Attach files">
             <svg viewBox="0 0 24 24"><path d="M16.5 6.5v10.6a4.5 4.5 0 0 1-9 0V5.6a3 3 0 0 1 6 0v10.3a1.5 1.5 0 0 1-3 0V6.5H9v9.4a3 3 0 0 0 6 0V5.6a4.5 4.5 0 0 0-9 0v11.5a6 6 0 0 0 12 0V6.5z"/></svg>
@@ -182,6 +209,8 @@
       <div class="danger-zone">
         <button class="row-btn" id="btnPin">📌 Pin chat</button>
         <button class="row-btn" id="btnMute">🔕 Mute notifications</button>
+        <button class="row-btn" id="btnArchive">🗄️ Archive chat</button>
+        <button class="row-btn" id="btnDuplicate">🧬 Duplicate agent</button>
         <button class="row-btn" id="btnExport">📤 Export chat</button>
         <button class="row-btn" id="btnReset">🔄 New session (clear memory)</button>
         <button class="row-btn danger" id="btnDelete">🗑️ Delete</button>
@@ -261,6 +290,88 @@
       <button value="cancel" class="ghost" formnovalidate>Cancel</button>
       <button value="ok" class="primary" id="fpChoose">Use this folder</button>
     </div>
+  </form>
+</dialog>
+
+<!-- ============ Quick switcher (Ctrl+K) ============ -->
+<dialog id="switcher" class="switcher">
+  <form method="dialog" id="switcherForm">
+    <input id="swInput" placeholder="Jump to a chat…" autocomplete="off" spellcheck="false">
+    <ul class="sw-list" id="swList"></ul>
+    <div class="sw-hint">↑↓ to move · Enter to open · Esc to close · Ctrl+/ for all shortcuts</div>
+  </form>
+</dialog>
+
+<!-- ============ Starred messages ============ -->
+<dialog id="starredDialog" class="wide">
+  <form method="dialog">
+    <h2>⭐ Starred messages</h2>
+    <ul class="starred-list" id="starredList"></ul>
+    <div class="dialog-actions">
+      <button value="cancel" class="ghost" formnovalidate>Close</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ============ Your prompt templates ============ -->
+<dialog id="tplDialog" class="wide">
+  <form method="dialog" id="tplForm">
+    <h2>📝 Prompt templates</h2>
+    <p class="muted">Type <b>/</b> in a message to use these. Yours sit next to the built-in ones.</p>
+    <ul class="tpl-list" id="tplList"></ul>
+    <div class="settings">
+      <label class="field"><span>Command</span><input id="tplName" placeholder="e.g. docs" maxlength="24" spellcheck="false" autocomplete="off"></label>
+      <label class="field"><span>Prompt</span><textarea id="tplText" rows="3" placeholder="e.g. Update the README for the changes we just made."></textarea></label>
+    </div>
+    <div class="dialog-actions">
+      <button type="button" class="ghost" id="tplAdd">＋ Add template</button>
+      <button value="cancel" class="primary" formnovalidate>Done</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ============ YouTube ============ -->
+<dialog id="ytDialog" class="wide">
+  <form method="dialog" id="ytForm">
+    <h2>📺 YouTube</h2>
+    <p class="muted">Let your agents upload videos and change your channel's name or description, through YouTube's official API. <b>Every action asks you first</b>, with no “Always allow”.</p>
+    <div class="yt-status" id="ytStatus"></div>
+    <div class="settings" id="ytSetup">
+      <ol class="yt-steps">
+        <li>Open <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a> and create a project.</li>
+        <li><b>APIs &amp; Services → Library</b>: enable <b>YouTube Data API v3</b>.</li>
+        <li><b>OAuth consent screen</b>: choose External and add your own Google account as a <b>test user</b>.</li>
+        <li><b>Credentials → Create credentials → OAuth client ID</b>, type <b>Desktop app</b>. Paste its ID and secret here.</li>
+      </ol>
+      <label class="field"><span>Client ID</span><input id="ytClientId" placeholder="…apps.googleusercontent.com" spellcheck="false" autocomplete="off"></label>
+      <label class="field"><span>Client secret</span><input id="ytSecret" type="password" placeholder="GOCSPX-…" spellcheck="false" autocomplete="off"></label>
+      <small class="muted" style="text-align:left;display:block">Saved only on this PC (data/youtube.json).</small>
+    </div>
+    <div class="dialog-actions">
+      <button type="button" class="ghost" id="ytDisconnect">Disconnect</button>
+      <button type="button" class="ghost" id="ytSave">Save</button>
+      <button type="button" class="primary" id="ytConnect">Connect YouTube</button>
+      <button value="cancel" class="ghost" formnovalidate>Close</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ============ Keyboard shortcuts ============ -->
+<dialog id="keysDialog">
+  <form method="dialog">
+    <h2>⌨️ Keyboard shortcuts</h2>
+    <dl class="keys">
+      <dt><kbd>Ctrl</kbd> <kbd>K</kbd></dt><dd>Jump to a chat</dd>
+      <dt><kbd>Alt</kbd> <kbd>↑</kbd> / <kbd>↓</kbd></dt><dd>Previous / next chat</dd>
+      <dt><kbd>Ctrl</kbd> <kbd>F</kbd></dt><dd>Search this chat</dd>
+      <dt><kbd>Enter</kbd></dt><dd>Send</dd>
+      <dt><kbd>Shift</kbd> <kbd>Enter</kbd></dt><dd>New line</dd>
+      <dt><kbd>/</kbd></dt><dd>Prompt templates (at the start of a message)</dd>
+      <dt><kbd>@</kbd></dt><dd>Mention an agent (in groups)</dd>
+      <dt><kbd>Esc</kbd></dt><dd>Close menus, search, reply</dd>
+      <dt><kbd>Ctrl</kbd> <kbd>/</kbd></dt><dd>This list</dd>
+    </dl>
+    <div class="dialog-actions"><button value="cancel" class="primary">Got it</button></div>
   </form>
 </dialog>
 
