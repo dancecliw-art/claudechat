@@ -16,6 +16,9 @@ test('unwrapShell strips the shell Codex runs commands with', () => {
   assert.strictEqual(codex.unwrapShell("/bin/bash -lc 'rm -rf build'"), 'rm -rf build');
   assert.strictEqual(codex.unwrapShell("/bin/bash -lc 'echo '\\''hi'\\'' > a.txt'"), "echo 'hi' > a.txt");
   assert.strictEqual(codex.unwrapShell('bash -c "git push origin main"'), 'git push origin main');
+  // How the real codex 0.163 quotes a command with single quotes in it.
+  assert.strictEqual(codex.unwrapShell(`/bin/bash -lc 'printf '"'"'%s'"'"' "$CLAUDECHAT_AGENT" > f'`), `printf '%s' "$CLAUDECHAT_AGENT" > f`);
+  assert.strictEqual(codex.unwrapShell(`/bin/bash -lc 'unterminated`), `'unterminated`);
   assert.strictEqual(codex.unwrapShell('"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Remove-Item -Recurse x"'), 'Remove-Item -Recurse x');
   assert.strictEqual(codex.unwrapShell('pwsh.exe -NoProfile -Command "Get-ChildItem"'), 'Get-ChildItem');
   assert.strictEqual(codex.unwrapShell('cmd.exe /c del /q build'), 'del /q build');

@@ -40,7 +40,12 @@ const VIDEO_SITE = /youtube|youtu\.be|tiktok|bytedance|douyin/i;
 const SENDS_DATA = /(^|\s)(-F|--form|-T|--upload-file|--data-binary|-InFile|-Form)(\s|=|$)|\b(upload|publish|videos\.insert)/i;
 const UPLOAD_TOOLS = /\b(youtube[-_]?upload|yt[-_]?upload|tiktok[-_]?upload(er)?|tiktokautouploader)\b/i;
 const VIDEO_UPLOAD = 'Uploads a video online (YouTube, TikTok…). This always asks; it can\'t be always-allowed.';
+// ClaudeChat's own YouTube API asks you itself (with no "Always allow"), so a plain call to it
+// isn't flagged twice. Anything that also posts a file or names a video site still is.
+const OWN_YT_API = /\/api\/youtube\/agent\b/;
+const POSTS_FILE = /(^|\s)(-F|--form|-T|--upload-file|--data-binary|-InFile|-Form)(\s|=|$)|youtube\.com|youtu\.be|googleapis|tiktok/i;
 function isVideoUpload(text) {
+  if (OWN_YT_API.test(text) && !POSTS_FILE.test(text.replace(/\$?\{?env:CLAUDECHAT_URL\}?|\$\{?CLAUDECHAT_URL\}?/gi, ''))) return false;
   if (UPLOAD_TOOLS.test(text)) return true;
   return (VIDEO_SITE.test(text) || VIDEO_FILE.test(text)) && SENDS_DATA.test(text);
 }

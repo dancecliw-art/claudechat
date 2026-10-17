@@ -581,6 +581,12 @@ dialog .settings { padding: 8px 20px; }
 .tpl-list li button { flex: none; width: 24px; height: 24px; border-radius: 50%; color: var(--text-2); }
 .tpl-list li button:hover { background: var(--hover); color: var(--danger); }
 
+/* ---- YouTube ---- */
+.yt-status { margin: 0 20px 6px; padding: 10px 12px; border-radius: 8px; background: var(--panel-2); font-size: 14px; }
+.yt-steps { margin: 0 0 10px; padding-left: 20px; font-size: 13.5px; color: var(--text-2); display: grid; gap: 4px; }
+.yt-steps a { color: var(--accent); }
+.yt-steps b { color: var(--text); font-weight: 600; }
+
 /* ---- keyboard shortcuts ---- */
 .keys { display: grid; grid-template-columns: auto 1fr; gap: 9px 16px; margin: 4px 22px 8px; align-items: center; font-size: 14px; }
 .keys dt { white-space: nowrap; }

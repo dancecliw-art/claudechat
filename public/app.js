@@ -84,7 +84,8 @@
         <span class="swatch">${sw.map((c) => `<i style="background:${c}"></i>`).join('')}</span>${name}<span class="check">✓</span>
       </button>`).join('') +
       `<div class="pop-label">Text size</div><div class="size-row">${SIZES.map(([id, label, title]) =>
-        `<button type="button" class="size-${id} ${id === size ? 'sel' : ''}" data-size-id="${id}" title="${title}">${label}</button>`).join('')}</div>`;
+        `<button type="button" class="size-${id} ${id === size ? 'sel' : ''}" data-size-id="${id}" title="${title}">${label}</button>`).join('')}</div>` +
+      '<div class="pop-label">Connections</div><button type="button" class="theme-opt" data-open-yt><span class="swatch"><i style="background:#ff0033"></i></span>YouTube…</button>';
   }
   $('#btnTheme').onclick = (e) => {
     e.stopPropagation();
@@ -94,6 +95,7 @@
   };
   $('#themePop').onclick = (e) => {
     e.stopPropagation();
+    if (e.target.closest('[data-open-yt]')) { $('#themePop').hidden = true; return openYouTube(); }
     const sz = e.target.closest('[data-size-id]');
     if (sz) { applySize(sz.dataset.sizeId); store('cc-size', sz.dataset.sizeId); return renderThemes(); }
     const b = e.target.closest('[data-theme-id]');
@@ -450,7 +452,7 @@
     denied: ['✕', 'Denied'],
     expired: ['⌛', 'Expired. The agent stopped before you answered'],
   };
-  const TOOL_VERB = { Bash: 'run a command', PowerShell: 'run a command', Write: 'write a file', Edit: 'edit a file', MultiEdit: 'edit a file', NotebookEdit: 'edit a notebook' };
+  const TOOL_VERB = { 'YouTube upload': 'upload a video to YouTube', 'YouTube channel': 'change your YouTube channel', Bash: 'run a command', PowerShell: 'run a command', Write: 'write a file', Edit: 'edit a file', MultiEdit: 'edit a file', NotebookEdit: 'edit a notebook' };
 
   function approvalHtml(m) {
     const a = m.approval;
@@ -1636,6 +1638,44 @@
   };
   setInterval(renderUsage, 30000);
 
+  // ---------- YouTube connection ----------
+  async function renderYouTube() {
+    let st;
+    try { st = await api('GET', '/youtube'); } catch (e) { return toast(e.message); }
+    $('#ytStatus').innerHTML = st.connected
+      ? `✅ Connected to <b>${esc(st.channel?.title || 'your channel')}</b>. Ask an agent to upload a video or change the channel; you'll get a card to approve each time.`
+      : st.configured ? 'Google app saved. Press <b>Connect YouTube</b> and sign in.' : 'Not set up yet. It takes about 5 minutes, once.';
+    $('#ytSetup').hidden = st.connected;
+    if (!$('#ytClientId').value) $('#ytClientId').value = st.clientId || '';
+    $('#ytConnect').hidden = st.connected || !st.configured;
+    $('#ytSave').hidden = st.connected;
+    $('#ytDisconnect').hidden = !st.connected;
+  }
+  function openYouTube() {
+    $('#ytSecret').value = '';
+    $('#ytDialog').showModal();
+    renderYouTube();
+  }
+  $('#ytSave').onclick = async () => {
+    try {
+      await api('POST', '/youtube/config', { clientId: $('#ytClientId').value, clientSecret: $('#ytSecret').value });
+      toast('Saved. Now press Connect YouTube.');
+      renderYouTube();
+    } catch (e) { toast(e.message); }
+  };
+  $('#ytConnect').onclick = async () => {
+    try {
+      const { url } = await api('POST', '/youtube/connect');
+      window.open(url, '_blank', 'noopener');
+      toast('Sign in with Google in the new window, then come back here.');
+    } catch (e) { toast(e.message); }
+  };
+  $('#ytDisconnect').onclick = async () => {
+    if (!confirm('Disconnect YouTube? Agents won’t be able to upload until you connect again.')) return;
+    await api('POST', '/youtube/disconnect').catch((e) => toast(e.message));
+    renderYouTube();
+  };
+
   // ---------- live events ----------
   function onEvent(ev) {
     switch (ev.type) {
@@ -1703,6 +1743,9 @@
       case 'usage':
         usage = ev.usage;
         renderUsage();
+        break;
+      case 'youtube':
+        if ($('#ytDialog').open) renderYouTube();
         break;
     }
   }

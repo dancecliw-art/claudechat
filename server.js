@@ -11,6 +11,7 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { assess } = require('./danger');
 const codex = require('./codex');
+const youtube = require('./youtube');
 
 const PORT = Number(process.env.PORT) || 4317;
 const APP_VERSION = '1.1.0';
@@ -156,6 +157,8 @@ if (sea) {
   process.on('uncaughtException', (e) => { write('Uncaught:', e && e.stack || e); });
   process.on('unhandledRejection', (e) => { write('Unhandled rejection:', e && e.stack || e); });
 }
+
+const yt = youtube.createYouTube(path.join(DATA_DIR, 'youtube.json'));
 
 let db = { chats: [], usage: null, costLog: [] };
 try {
@@ -364,7 +367,15 @@ const RUNNERS = { claude: (o) => runClaude(o), antigravity: (o) => runAntigravit
 // Also keeps per-agent stats (turns, tokens, cost) on the agent's own chat, so its info
 // panel counts work done in groups too.
 async function runOnce(opts) {
-  const r = await (RUNNERS[opts.agent.provider] || RUNNERS.claude)(opts);
+  // A private ID in the agent's environment tells ClaudeChat which agent (and chat) is asking
+  // when it calls the local YouTube API. It only works while this turn runs. (Its name avoids
+  // KEY/SECRET/TOKEN: Codex drops such variables from commands, see shell_environment.rs.)
+  const key = crypto.randomBytes(18).toString('base64url');
+  agentKeys.set(key, { chat: opts.chat, agent: opts.agent, from: opts.from });
+  const env = { ...process.env, CLAUDECHAT_URL: `http://localhost:${PORT}`, CLAUDECHAT_AGENT: key };
+  if (yt.status().connected) opts = { ...opts, systemPrompt: [opts.systemPrompt, YOUTUBE_HOWTO].filter(Boolean).join('\n\n') };
+  let r;
+  try { r = await (RUNNERS[opts.agent.provider] || RUNNERS.claude)({ ...opts, env }); } finally { agentKeys.delete(key); }
   const own = findChat(opts.agent.id);
   if (own && !r.stopped) {
     const st = own.stats || (own.stats = { turns: 0, tokens: 0, cost: 0 });
@@ -377,7 +388,7 @@ async function runOnce(opts) {
   return r;
 }
 
-function runClaude({ chat, agent, sessionId, systemPrompt, prompt, from }) {
+function runClaude({ chat, agent, sessionId, systemPrompt, prompt, from, env }) {
   return new Promise((resolve) => {
     // Two-way stdio: the prompt goes in as a stream-json message, and the CLI sends its
     // permission prompts back to us as control requests (answered in onControlRequest).
@@ -396,7 +407,7 @@ function runClaude({ chat, agent, sessionId, systemPrompt, prompt, from }) {
     let cwd = agent.cwd;
     if (!cwd || !fs.existsSync(cwd)) cwd = os.homedir();
 
-    const proc = spawn(CLAUDE_BIN, args, { cwd, windowsHide: true, env: process.env });
+    const proc = spawn(CLAUDE_BIN, args, { cwd, windowsHide: true, env: env || process.env });
     const run = { proc, agent, cwd, from, who: from?.name, sessionId, streamed: new Map(), streamedMsgIds: new Set(), tools: new Map(), pending: new Set(), stderr: '' };
     addRun(chat.id, run);
     status(chat, run, 'typing…');
@@ -640,7 +651,7 @@ const AGY_TOOL_NAMES = {
 const SHELL_TOOL = process.platform === 'win32' ? 'PowerShell' : 'Bash';
 const MAX_AGY_ROUNDS = 15;
 
-function agyTurn({ chat, agent, sessionId, prompt, from, skipPermissions, cwd }) {
+function agyTurn({ chat, agent, sessionId, prompt, from, skipPermissions, cwd, env }) {
   return new Promise((resolve) => {
     const args = ['--input-format', 'stream-json', '--output-format', 'stream-json', '--model', agyModelId(agent)];
     if (sessionId) args.push('--conversation', sessionId);
@@ -654,7 +665,7 @@ function agyTurn({ chat, agent, sessionId, prompt, from, skipPermissions, cwd })
     for (const d of dirs) args.push('--add-dir', d);
     args.push('--print='); // print mode; the prompt arrives on stdin as stream-json
 
-    const proc = spawn(AGY_BIN, args, { cwd, windowsHide: true, env: process.env });
+    const proc = spawn(AGY_BIN, args, { cwd, windowsHide: true, env: env || process.env });
     const run = {
       proc, agent, cwd, from, who: from?.name, sessionId, steps: new Map(), commands: [], pending: new Set(), stderr: '', denied: [],
       // During a one-off "skip permissions" retry, ClaudeChat still stops unchecked risky commands.
@@ -817,7 +828,7 @@ function expireApprovals(chatId) {
 }
 
 // Runs exactly one approved command the way the agent asked, and captures its output.
-function runShell(chat, command, cwd, from) {
+function runShell(chat, command, cwd, from, env) {
   return new Promise((resolve) => {
     const win = process.platform === 'win32';
     // -EncodedCommand passes the command byte-for-byte, so quotes can't be re-interpreted.
@@ -827,7 +838,7 @@ function runShell(chat, command, cwd, from) {
     const args = win
       ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(preamble + command, 'utf16le').toString('base64')]
       : ['-lc', command];
-    const proc = spawn(win ? 'powershell.exe' : 'bash', args, { cwd, windowsHide: true });
+    const proc = spawn(win ? 'powershell.exe' : 'bash', args, { cwd, windowsHide: true, env: env || process.env });
     const run = { proc, who: from?.name, pending: new Set() };
     addRun(chat.id, run);
     status(chat, run, 'running a command…');
@@ -845,7 +856,7 @@ function runShell(chat, command, cwd, from) {
   });
 }
 
-async function handleBlocked(chat, agent, from, b, cwd) {
+async function handleBlocked(chat, agent, from, b, cwd, env) {
   if (b.kind === 'command') {
     const cmd = b.command;
     const card = b.msg;
@@ -868,7 +879,7 @@ async function handleBlocked(chat, agent, from, b, cwd) {
     }
     setCard({ status: 'running', result: undefined });
     const dir = b.cwd && fs.existsSync(b.cwd) ? b.cwd : cwd;
-    const r = await runShell(chat, cmd, dir, from);
+    const r = await runShell(chat, cmd, dir, from, env);
     setCard({ status: r.code === 0 ? 'done' : 'error', result: r.output || '(no output)' });
     return { text: `Command: ${cmd}\nExit code: ${r.code}\nOutput:\n${r.output || '(no output)'}` };
   }
@@ -882,7 +893,7 @@ async function handleBlocked(chat, agent, from, b, cwd) {
   return { text: `The user approved "${b.name}". Retry that action now.`, skip: true };
 }
 
-async function runAntigravity({ chat, agent, sessionId, systemPrompt, prompt, from }) {
+async function runAntigravity({ chat, agent, sessionId, systemPrompt, prompt, from, env }) {
   if (!AGY_BIN) {
     pushMessage(chat, { role: 'system', text: 'Antigravity CLI (agy) not found. Install Google Antigravity and its CLI, then restart ClaudeChat.', error: true });
     return { sessionId, ok: false };
@@ -899,7 +910,7 @@ async function runAntigravity({ chat, agent, sessionId, systemPrompt, prompt, fr
   let skip = false;
   let tokens = 0;
   for (let round = 0; round < MAX_AGY_ROUNDS; round++) {
-    const r = await agyTurn({ chat, agent, sessionId, prompt, from, skipPermissions: skip, cwd });
+    const r = await agyTurn({ chat, agent, sessionId, prompt, from, skipPermissions: skip, cwd, env });
     tokens += r.tokens || 0;
     if (r.sessionId) sessionId = r.sessionId;
     if (r.stopped || stopFlags.has(chat.id) || !r.ok || !r.blocked.length) {
@@ -912,7 +923,7 @@ async function runAntigravity({ chat, agent, sessionId, systemPrompt, prompt, fr
     skip = false;
     const notes = [];
     for (const b of r.blocked) {
-      const h = await handleBlocked(chat, agent, from, b, cwd);
+      const h = await handleBlocked(chat, agent, from, b, cwd, env);
       if (stopFlags.has(chat.id)) return { sessionId, ok: false, stopped: true, tokens };
       notes.push(h.text);
       if (h.skip) skip = true;
@@ -932,16 +943,16 @@ async function runAntigravity({ chat, agent, sessionId, systemPrompt, prompt, fr
 
 const CODEX_CLIENT = { clientInfo: { name: 'claudechat', title: 'ClaudeChat', version: APP_VERSION }, capabilities: null };
 
-function spawnCodex(cwd) {
+function spawnCodex(cwd, env) {
   // A bare npm shim (codex.cmd) only starts through a shell (quoted: the path may have spaces);
   // the only argument is a fixed word.
   const shell = /\.(cmd|bat)$/i.test(CODEX_BIN || '');
-  return spawn(shell ? `"${CODEX_BIN}"` : CODEX_BIN, ['app-server'], { cwd, windowsHide: true, env: process.env, shell });
+  return spawn(shell ? `"${CODEX_BIN}"` : CODEX_BIN, ['app-server'], { cwd, windowsHide: true, env: env || process.env, shell });
 }
 
 // Starts a JSON-RPC session with a fresh app-server process.
-function codexSession(cwd, handlers) {
-  const proc = spawnCodex(cwd);
+function codexSession(cwd, handlers, env) {
+  const proc = spawnCodex(cwd, env);
   const rpc = codex.createRpc((m) => { if (proc.stdin.writable) proc.stdin.write(JSON.stringify(m) + '\n'); }, handlers);
   proc.stdin.on('error', () => {});
   proc.stdout.on('data', codex.lineReader((m) => { try { rpc.handle(m); } catch (e) { console.error('codex event error', e); } }));
@@ -971,7 +982,7 @@ function loadCodexModels() {
   })();
 }
 
-function runCodex({ chat, agent, sessionId, systemPrompt, prompt, from, images }) {
+function runCodex({ chat, agent, sessionId, systemPrompt, prompt, from, images, env }) {
   if (!CODEX_BIN) {
     pushMessage(chat, { role: 'system', text: 'Codex CLI not found. Install it (npm install -g @openai/codex), run `codex login` once, then restart ClaudeChat.', error: true });
     return Promise.resolve({ sessionId, ok: false });
@@ -986,7 +997,7 @@ function runCodex({ chat, agent, sessionId, systemPrompt, prompt, from, images }
     const { proc, rpc } = codexSession(cwd, {
       onRequest: (method, params, id) => onCodexRequest(chat, run, method, params, id),
       onNotification: (method, params) => handleCodexEvent(chat, run, method, params),
-    });
+    }, env);
     Object.assign(run, { proc, rpc });
     addRun(chat.id, run);
     status(chat, run, 'typing…');
@@ -1217,6 +1228,91 @@ function onCodexRequest(chat, run, method, params, requestId) {
   status(chat, run, 'waiting for your approval');
   broadcast({ type: 'chat', chat: summary(chat) });
 }
+
+// ---------- YouTube (agents upload videos / edit the channel, you approve each time) ----------
+// Agents call ClaudeChat's local API from a shell command; the request carries the agent's
+// private ID (CLAUDECHAT_AGENT), so the Allow/Deny card lands in the right chat. Every action
+// asks: there is no "Always allow" for these. The work itself is done by youtube.js through
+// YouTube's official API with the user's own Google login.
+
+const agentKeys = new Map(); // CLAUDECHAT_AGENT value -> { chat, agent, from } while a turn runs
+const ytJobs = new Map(); // job id -> { id, key, status: waiting|working|done|denied|error, result, waiters }
+
+const YOUTUBE_HOWTO = [
+  'YouTube: the user connected their YouTube channel to ClaudeChat. To upload a video or change the channel name/description, call ClaudeChat\'s local API. Never post any other way. The user approves every action in the chat.',
+  'POST $CLAUDECHAT_URL/api/youtube/agent with header "X-ClaudeChat-Agent: <the CLAUDECHAT_AGENT environment variable>" and a JSON body, one of:',
+  '  {"action":"upload","file":"<absolute path to the video>","title":"...","description":"...","privacy":"private|unlisted|public","tags":["..."]}',
+  '  {"action":"channel","title":"<new channel name>","description":"<new channel description>"}  (either field may be left out)',
+  'PowerShell: Invoke-RestMethod -Method Post -Uri "$env:CLAUDECHAT_URL/api/youtube/agent" -Headers @{ "X-ClaudeChat-Agent" = $env:CLAUDECHAT_AGENT } -ContentType "application/json; charset=utf-8" -TimeoutSec 600 -Body (@{ action = "upload"; file = "C:\\path\\video.mp4"; title = "My video"; privacy = "private" } | ConvertTo-Json)',
+  'Bash: curl -s -X POST "$CLAUDECHAT_URL/api/youtube/agent" -H "X-ClaudeChat-Agent: $CLAUDECHAT_AGENT" -H "Content-Type: application/json" -d \'{"action":"upload","file":"/path/video.mp4","title":"My video","privacy":"private"}\'',
+  'The reply is JSON with "status": "done" (with the result, e.g. the video URL), "denied" (the user said no; respect it and don\'t retry), "error", or "waiting"/"working". For "waiting" or "working", GET $CLAUDECHAT_URL/api/youtube/agent/<id> with the same header to keep waiting. Use privacy "private" unless the user asked for something else.',
+].join('\n');
+
+function finishYtJob(job, status, result) {
+  job.status = status;
+  job.result = result;
+  for (const w of job.waiters.splice(0)) w();
+}
+
+// The job as the agent sees it, after waiting up to `ms` for it to finish.
+async function ytJobReply(job, ms = 90000) {
+  if (job.status === 'waiting' || job.status === 'working') {
+    await new Promise((resolve) => {
+      const t = setTimeout(resolve, ms);
+      job.waiters.push(() => { clearTimeout(t); resolve(); });
+    });
+  }
+  return { id: job.id, status: job.status, ...(job.result || {}) };
+}
+
+function startYtJob(key, body) {
+  const who = agentKeys.get(key);
+  const { chat, agent, from } = who;
+  const action = body.action;
+  let summary, reasons, tool, run;
+  if (action === 'upload') {
+    const u = yt.checkUpload(body);
+    tool = 'YouTube upload';
+    summary = `Upload “${u.title}” to ${yt.status().channel?.title || 'your channel'} (${u.privacy})\nFile: ${u.file} (${(u.size / 1048576).toFixed(1)} MB)${u.description ? `\nDescription: ${u.description.slice(0, 400)}${u.description.length > 400 ? '…' : ''}` : ''}${u.tags.length ? `\nTags: ${u.tags.join(', ')}` : ''}`;
+    reasons = [`Posts a video to your YouTube channel${u.privacy === 'public' ? ', publicly' : ''}`, 'YouTube actions always ask; they can’t be always-allowed'];
+    run = async () => {
+      const r = await yt.upload(u);
+      pushMessage(chat, { role: 'system', text: `📺 Uploaded to YouTube (${r.privacy}): ${r.url}` });
+      return r;
+    };
+  } else if (action === 'channel') {
+    const change = yt.checkChannel(body);
+    tool = 'YouTube channel';
+    summary = [change.title !== undefined ? `New channel name: ${change.title}` : '', change.description !== undefined ? `New description:\n${change.description}` : ''].filter(Boolean).join('\n');
+    reasons = ['Changes your YouTube channel', 'YouTube actions always ask; they can’t be always-allowed'];
+    run = async () => {
+      const r = await yt.updateChannel(change);
+      const missed = r.notApplied.length ? ` YouTube didn't apply the ${r.notApplied.join(' and ')} change; it may only allow that in YouTube Studio.` : '';
+      pushMessage(chat, { role: 'system', text: `📺 YouTube channel updated.${missed}` });
+      return r;
+    };
+  } else {
+    throw new Error('action must be "upload" or "channel"');
+  }
+  const job = { id: uid(), key, status: 'waiting', result: null, waiters: [] };
+  ytJobs.set(job.id, job);
+  askApproval(chat, agent, from, tool, { action, ...body }, { summary, reasons, ruleKey: 'youtube', alwaysAsk: true }).then(async ({ allowed, note }) => {
+    if (!allowed) return finishYtJob(job, 'denied', { note: note || undefined, message: 'The user denied this. Do not retry it.' });
+    job.status = 'working';
+    try {
+      finishYtJob(job, 'done', await run());
+    } catch (e) {
+      pushMessage(chat, { role: 'system', text: `YouTube: ${e.message}`, error: true });
+      finishYtJob(job, 'error', { error: e.message });
+    }
+    save();
+  });
+  setTimeout(() => ytJobs.delete(job.id), 6 * 3600e3).unref();
+  return job;
+}
+
+const ytPage = (title, text) => `<!doctype html><meta charset="utf-8"><title>${title}</title><body style="font:16px system-ui;padding:40px;text-align:center"><h2>${title}</h2><p>${text}</p></body>`;
+const escHtml = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // ---------- turns ----------
 
@@ -1544,6 +1640,51 @@ const server = http.createServer(async (req, res) => {
       const file = path.join(UPLOAD_DIR, path.basename(parts[2]));
       if (!fs.existsSync(file)) { res.writeHead(404); return res.end(); }
       return serveFile(res, file);
+    }
+
+    // ----- YouTube -----
+    if (route === 'youtube') {
+      const sub = parts[2];
+      if (!sub && req.method === 'GET') return json(res, 200, yt.status());
+      if (sub === 'config' && req.method === 'POST') {
+        const body = await readBody(req);
+        yt.configure(body.clientId, body.clientSecret);
+        broadcast({ type: 'youtube' });
+        return json(res, 200, yt.status());
+      }
+      if (sub === 'connect' && req.method === 'POST') {
+        return json(res, 200, { url: yt.authUrl(`http://127.0.0.1:${PORT}/api/youtube/callback`) });
+      }
+      if (sub === 'callback' && req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        if (url.searchParams.get('error')) return res.end(ytPage('Not connected', `Google said: ${escHtml(url.searchParams.get('error'))}. You can close this tab.`));
+        try {
+          const ch = await yt.finishAuth(url.searchParams.get('code'), url.searchParams.get('state'));
+          broadcast({ type: 'youtube' });
+          return res.end(ytPage('YouTube connected', `ClaudeChat can now ask you before uploading to <b>${escHtml(ch.title)}</b>. You can close this tab.`));
+        } catch (e) {
+          return res.end(ytPage('Not connected', escHtml(e.message)));
+        }
+      }
+      if (sub === 'disconnect' && req.method === 'POST') {
+        yt.disconnect();
+        broadcast({ type: 'youtube' });
+        return json(res, 200, yt.status());
+      }
+      // Agents: POST /api/youtube/agent { action, ... }, GET /api/youtube/agent/:job
+      if (sub === 'agent') {
+        const key = String(req.headers['x-claudechat-agent'] || '');
+        if (!agentKeys.has(key)) return json(res, 403, { status: 'error', error: 'Unknown or expired X-ClaudeChat-Agent. Use the CLAUDECHAT_AGENT environment variable of this turn.' });
+        if (!yt.status().connected) return json(res, 409, { status: 'error', error: 'YouTube is not connected. Ask the user to connect it in ClaudeChat (🌙 menu → YouTube).' });
+        if (!parts[3] && req.method === 'POST') {
+          let job;
+          try { job = startYtJob(key, await readBody(req)); } catch (e) { return json(res, 400, { status: 'error', error: e.message }); }
+          return json(res, 200, await ytJobReply(job));
+        }
+        const job = ytJobs.get(parts[3]);
+        if (job && job.key === key && req.method === 'GET') return json(res, 200, await ytJobReply(job));
+        return json(res, 404, { status: 'error', error: 'No such request' });
+      }
     }
 
     // ----- starred messages, across all chats (newest first) -----

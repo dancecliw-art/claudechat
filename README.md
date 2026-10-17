@@ -66,6 +66,20 @@ If the [Antigravity](https://antigravity.google) CLI (`agy`) is installed, pick 
 - **Usage:** Antigravity agents show tokens used in the usage card. They count against your Google plan, not your Claude limits.
 - **Notes:** Antigravity has no system-prompt flag, so an agent's instructions go along with its first message. Antigravity can't start in a working folder with a very long path, so pick a short folder.
 
+## YouTube: agents upload videos and edit your channel
+
+Agents can upload videos to your YouTube channel and change its name or description, through YouTube's official Data API. **Every action shows an Allow/Deny card first**, with no "Always allow". Uploads are private unless you or the agent pick unlisted or public.
+
+**Set up once (about 5 minutes):** 🌙 menu → **YouTube…**, then follow the steps there:
+
+1. In [Google Cloud Console](https://console.cloud.google.com/), create a project and enable **YouTube Data API v3**.
+2. On the **OAuth consent screen**, choose External and add your Google account as a **test user**.
+3. Under **Credentials**, create an **OAuth client ID** of type **Desktop app**. Paste its ID and secret into ClaudeChat, press **Save**, then **Connect YouTube** and sign in.
+
+Then just ask an agent, e.g. "upload `C:\Videos\clip.mp4` to YouTube as unlisted, title it 'Test'". Each agent turn gets a private ID (`CLAUDECHAT_AGENT`) that works only while it runs, so the card lands in the right chat. The login is saved only on your PC in `data/youtube.json`.
+
+**Limits:** YouTube may refuse channel name changes made through the API (names are tied to your Google account). ClaudeChat reads the channel back and tells you if a change didn't apply. TikTok isn't supported: its posting API only works for apps TikTok has reviewed and approved.
+
 ## How it works
 
 - Each chat runs its CLI (`claude -p`, `codex app-server` or `agy`) in its own **working folder**, with that chat's **model**, **effort** and **permission mode**, and resumes its own session, so every agent keeps its memory between messages.

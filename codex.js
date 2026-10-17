@@ -137,10 +137,45 @@ function unwrapShell(cmd) {
     || s.match(/^(?:"[^"]*[\\/])?(?:[^\s"]*[\\/])?(?:powershell|pwsh)(?:\.exe)?"?\s+(?:-(?:NoProfile|NoLogo|NonInteractive)\s+)*-(?:Command|c)\s+([\s\S]+)$/i)
     || s.match(/^(?:"[^"]*[\\/])?(?:[^\s"]*[\\/])?cmd(?:\.exe)?"?\s+\/[cC]\s+([\s\S]+)$/);
   if (!m) return s;
-  let inner = m[1].trim();
-  if (inner.length >= 2 && inner[0] === "'" && inner.endsWith("'")) inner = inner.slice(1, -1).replace(/'\\''/g, "'");
-  else if (inner.length >= 2 && inner[0] === '"' && inner.endsWith('"')) inner = inner.slice(1, -1).replace(/\\"/g, '"');
-  return inner;
+  const inner = m[1].trim();
+  // PowerShell and cmd quote differently; only POSIX shells get the full word parse.
+  if (!/^(?:"[^"]*[\\/])?(?:[^\s"]*[\\/])?(?:bash|zsh|sh|dash|fish)/i.test(s)) {
+    return inner.length >= 2 && inner[0] === '"' && inner.endsWith('"') ? inner.slice(1, -1).replace(/\\"/g, '"') : inner;
+  }
+  const word = shellWord(inner);
+  return word === null ? inner : word;
+}
+
+// The value of one POSIX shell word, e.g. 'echo '"'"'hi'"'"'' -> echo 'hi'. Codex quotes the
+// command it hands to `bash -lc` this way. Returns null if the text isn't exactly one word.
+function shellWord(t) {
+  let out = '';
+  let i = 0;
+  while (i < t.length) {
+    const c = t[i];
+    if (c === "'") {
+      const end = t.indexOf("'", i + 1);
+      if (end < 0) return null;
+      out += t.slice(i + 1, end);
+      i = end + 1;
+    } else if (c === '"') {
+      i++;
+      while (i < t.length && t[i] !== '"') {
+        if (t[i] === '\\' && i + 1 < t.length && '"\\$`\n'.includes(t[i + 1])) { out += t[i + 1]; i += 2; } else out += t[i++];
+      }
+      if (i >= t.length) return null;
+      i++;
+    } else if (c === '\\') {
+      out += t[i + 1] ?? '';
+      i += 2;
+    } else if (/\s/.test(c)) {
+      return null;
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  return out;
 }
 
 // What an approval request is about, ready for danger.js's assess().

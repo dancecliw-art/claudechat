@@ -330,6 +330,32 @@
   </form>
 </dialog>
 
+<!-- ============ YouTube ============ -->
+<dialog id="ytDialog" class="wide">
+  <form method="dialog" id="ytForm">
+    <h2>📺 YouTube</h2>
+    <p class="muted">Let your agents upload videos and change your channel's name or description, through YouTube's official API. <b>Every action asks you first</b>, with no “Always allow”.</p>
+    <div class="yt-status" id="ytStatus"></div>
+    <div class="settings" id="ytSetup">
+      <ol class="yt-steps">
+        <li>Open <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a> and create a project.</li>
+        <li><b>APIs &amp; Services → Library</b>: enable <b>YouTube Data API v3</b>.</li>
+        <li><b>OAuth consent screen</b>: choose External and add your own Google account as a <b>test user</b>.</li>
+        <li><b>Credentials → Create credentials → OAuth client ID</b>, type <b>Desktop app</b>. Paste its ID and secret here.</li>
+      </ol>
+      <label class="field"><span>Client ID</span><input id="ytClientId" placeholder="…apps.googleusercontent.com" spellcheck="false" autocomplete="off"></label>
+      <label class="field"><span>Client secret</span><input id="ytSecret" type="password" placeholder="GOCSPX-…" spellcheck="false" autocomplete="off"></label>
+      <small class="muted" style="text-align:left;display:block">Saved only on this PC (data/youtube.json).</small>
+    </div>
+    <div class="dialog-actions">
+      <button type="button" class="ghost" id="ytDisconnect">Disconnect</button>
+      <button type="button" class="ghost" id="ytSave">Save</button>
+      <button type="button" class="primary" id="ytConnect">Connect YouTube</button>
+      <button value="cancel" class="ghost" formnovalidate>Close</button>
+    </div>
+  </form>
+</dialog>
+
 <!-- ============ Keyboard shortcuts ============ -->
 <dialog id="keysDialog">
   <form method="dialog">

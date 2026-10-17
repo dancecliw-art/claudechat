@@ -92,6 +92,9 @@ async function play(turn, turnId) {
   }
 }
 
+// What ClaudeChat put in this agent's environment (its private ID for local APIs).
+log({ env: { agent: process.env.CLAUDECHAT_AGENT || null, url: process.env.CLAUDECHAT_URL || null } });
+
 let buf = '';
 process.stdin.on('data', (d) => {
   buf += d;

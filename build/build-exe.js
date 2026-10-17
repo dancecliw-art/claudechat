@@ -1,7 +1,7 @@
 // Builds dist/exe-builder/ClaudeChat.exe: a Node single-executable app (Node runtime +
 // bundled server + embedded web files). Windows x64. Run: node build/build-exe.js
 //
-// Steps: bundle server.js + danger.js + codex.js -> SEA blob with public/ as assets -> copy node.exe ->
+// Steps: bundle server.js + danger.js + codex.js + youtube.js -> SEA blob with public/ as assets -> copy node.exe ->
 // inject blob (build/inject.cs, compiled with Windows' built-in csc) -> flip the SEA fuse.
 
 const fs = require('fs');
@@ -17,7 +17,7 @@ const CSC = path.join(process.env.WINDIR || 'C:\\Windows', 'Microsoft.NET', 'Fra
 
 // server.js with its local modules inlined: each require('./x') becomes an inline module.
 // Exported so tests can check the bundle on any OS.
-const LOCAL_MODULES = ['danger', 'codex'];
+const LOCAL_MODULES = ['danger', 'codex', 'youtube'];
 function bundleSource() {
   let server = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
   let head = '';
